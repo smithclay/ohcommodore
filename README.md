@@ -4,31 +4,37 @@ A lightweight multi-coding agent control plane built on top of [exe.dev](https:/
 
 Loosely inspired by Steve Yegge's [Gas Town](https://github.com/steveyegge/gastown), this is going to be one of approximately 400,000 agent orchestration tools in 2026. Instead of the "Mad Max" naming conventions in Yegge's post, we're going with a nautical theme.
 
+## Install
+
+```bash
+brew install smithclay/tap/ohcommodore
+```
+
 ## Quick Start
 
 ```bash
 # Bootstrap the flagship
-./ohcommodore init
+ohcommodore init
 
 # Check fleet status
-./ohcommodore fleet status
+ohcommodore fleet status
 
 # Create a ship for a repo
 # GH_TOKEN should be a fine-grained access token scoped to the repo
 # Create a token at https://github.com/settings/personal-access-tokens
-GH_TOKEN=... ./ohcommodore ship create owner/repo
+GH_TOKEN=... ohcommodore ship create owner/repo
 
 # SSH into a ship
-./ohcommodore ship ssh reponame
+ohcommodore ship ssh reponame
 
 # Destroy a ship
-./ohcommodore ship destroy reponame
+ohcommodore ship destroy reponame
 
 # Destroy all ships
-./ohcommodore fleet sink
+ohcommodore fleet sink
 
 # Destroy everything (ships + flagship)
-./ohcommodore fleet sink --scuttle
+ohcommodore fleet sink --scuttle
 ```
 
 ## Architecture
