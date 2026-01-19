@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO="$1"
+NAME="${REPO##*/}"
+
+: "${GH_TOKEN:?GH_TOKEN required}"
+
+INIT_URL="${INIT_URL:-https://raw.githubusercontent.com/smithclay/ohcommodore/main/cloudinit/init.sh}"
+SSH_RETRIES="${SSH_RETRIES:-30}"
+SSH_RETRY_DELAY="${SSH_RETRY_DELAY:-2}"
+
+log() { echo "==> $*" >&2; }
+
+create_json=$(ssh exe.dev new --json \
+  --name="ship-${NAME}" \
+  --no-email \
+  --env GH_TOKEN="$GH_TOKEN" \
+  --env TARGET_REPO="$REPO")
+
+ssh_dest=$(echo "$create_json" | jq -r '.ssh_dest')
+[[ -n "$ssh_dest" && "$ssh_dest" != "null" ]] || { echo "ERROR: Failed to get ssh_dest" >&2; exit 1; }
+
+log "Ship VM created: $ssh_dest"
+log "Waiting for SSH..."
+
+# Wait for SSH to be ready
+for ((i=1; i<=SSH_RETRIES; i++)); do
+  if ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=5 "$ssh_dest" 'true' >/dev/null 2>&1; then
+    break
+  fi
+  log "SSH not ready ($i/$SSH_RETRIES)..."
+  sleep "$SSH_RETRY_DELAY"
+done
+
+# Run init script
+log "Running init script on $ssh_dest..."
+ssh -o StrictHostKeyChecking=accept-new "$ssh_dest" \
+  "GH_TOKEN=$(printf %q "$GH_TOKEN") TARGET_REPO=$(printf %q "$REPO") bash -lc 'curl -fsSL $(printf %q "$INIT_URL") | bash'" >&2
+
+# Update fleet.json
+jq --arg name "$NAME" \
+   --arg repo "$REPO" \
+   --arg dest "$ssh_dest" \
+   '.ships[$name] = {repo: $repo, ssh_dest: $dest, status: "running", created_at: (now|todate)}' \
+   ~/.ohcommodore/fleet.json > ~/.ohcommodore/fleet.json.tmp \
+   && mv ~/.ohcommodore/fleet.json.tmp ~/.ohcommodore/fleet.json
+
+echo "$ssh_dest"

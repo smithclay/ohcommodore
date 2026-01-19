@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_DIR="$HOME/.ohcommodore"
+CONFIG_FILE="$CONFIG_DIR/config.json"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+log() { printf '==> %s\n' "$*"; }
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
+}
+
+need_flagship() {
+  [[ -f "$CONFIG_FILE" ]] || die "No flagship configured. Run: ohcommodore init"
+}
+
+flagship() {
+  jq -r '.flagship' "$CONFIG_FILE"
+}
+
+flagship_vm() {
+  jq -r '.flagship_vm' "$CONFIG_FILE"
+}
+
+flagship_ssh() {
+  ssh -A "$(flagship)" "$@"
+}
+
+wait_for_ssh() {
+  local dest="$1"
+  local retries="${2:-30}"
+  local delay="${3:-2}"
+  local opts='-o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=5'
+
+  for ((i=1; i<=retries; i++)); do
+    if ssh $opts "$dest" 'true' >/dev/null 2>&1; then
+      return 0
+    fi
+    log "SSH not ready ($i/$retries)..."
+    sleep "$delay"
+  done
+  return 1
+}
+
+cmd_init() {
+  need_cmd ssh
+  need_cmd jq
+  need_cmd scp
+
+  [[ -f "$CONFIG_FILE" ]] && die "Already initialized. Config: $CONFIG_FILE"
+
+  log "Creating flagship VM..."
+  create_json=$(ssh exe.dev new --json --name="flagship-ohcommodore" --no-email) \
+    || die "Failed to create flagship VM"
+
+  ssh_dest=$(echo "$create_json" | jq -r '.ssh_dest // empty')
+  [[ -n "$ssh_dest" ]] || die "Failed to get ssh_dest from: $create_json"
+
+  flagship_dest="$ssh_dest"
+
+  log "Flagship created: $ssh_dest"
+  log "Waiting for SSH..."
+  sleep 5
+
+  wait_for_ssh "$flagship_dest" || die "SSH never became ready for $flagship_dest"
+
+  log "Installing flagship scripts..."
+  ssh "$flagship_dest" 'mkdir -p ~/.ohcommodore/bin'
+  scp -q "$SCRIPT_DIR/flagship/bin/"* "${flagship_dest}:~/.ohcommodore/bin/"
+  ssh "$flagship_dest" 'chmod +x ~/.ohcommodore/bin/*'
+
+  # Initialize empty fleet.json
+  ssh "$flagship_dest" 'echo "{\"ships\":{},\"updated_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > ~/.ohcommodore/fleet.json'
+
+  # Generate SSH key on flagship and register with exe.dev
+  log "Setting up flagship SSH key..."
+  flagship_pubkey=$(ssh "$flagship_dest" 'ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q 2>/dev/null; cat ~/.ssh/id_ed25519.pub')
+  ssh exe.dev ssh-key add "$flagship_pubkey" || log "Warning: Could not add flagship SSH key (may already exist)"
+  ssh "$flagship_dest" 'ssh -o StrictHostKeyChecking=accept-new exe.dev whoami >/dev/null 2>&1' || true
+
+  log "Saving local config..."
+  mkdir -p "$CONFIG_DIR"
+  cat > "$CONFIG_FILE" <<EOF
+{
+  "flagship": "$flagship_dest",
+  "flagship_vm": "flagship-ohcommodore",
+  "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+
+  log "Done! Flagship ready at: $flagship_dest"
+  log "Run 'ohcommodore fleet status' to verify."
+}
+
+cmd_fleet_status() {
+  need_flagship
+
+  echo "FLAGSHIP: $(flagship)"
+  echo ""
+
+  fleet_json=$(flagship_ssh 'cat ~/.ohcommodore/fleet.json')
+
+  ship_count=$(echo "$fleet_json" | jq '.ships | length')
+
+  if [[ "$ship_count" -eq 0 ]]; then
+    echo "SHIPS: (none)"
+  else
+    echo "SHIPS ($ship_count):"
+    printf "  %-15s %-30s %s\n" "NAME" "REPO" "STATUS"
+    echo "$fleet_json" | jq -r '.ships | to_entries[] | "  \(.key)\t\(.value.repo)\t\(.value.status)"' | \
+      while IFS=$'\t' read -r name repo status; do
+        printf "  %-15s %-30s %s\n" "$name" "$repo" "$status"
+      done
+  fi
+}
+
+cmd_ship_create() {
+  need_flagship
+  local repo="$1"
+  [[ -n "$repo" ]] || die "Usage: ohcommodore ship create <owner/repo>"
+
+  local name="${repo##*/}"
+  log "Creating ship '$name' for $repo..."
+
+  ssh_dest=$(flagship_ssh "GH_TOKEN='$GH_TOKEN' ~/.ohcommodore/bin/ship-create '$repo'")
+
+  log "Ship ready: $ssh_dest"
+}
+
+cmd_ship_destroy() {
+  need_flagship
+  local name="$1"
+  [[ -n "$name" ]] || die "Usage: ohcommodore ship destroy <name>"
+
+  log "Destroying ship '$name'..."
+  flagship_ssh "~/.ohcommodore/bin/ship-destroy '$name'"
+  log "Done."
+}
+
+cmd_ship_ssh() {
+  need_flagship
+  local name="$1"
+  [[ -n "$name" ]] || die "Usage: ohcommodore ship ssh <name>"
+
+  local dest
+  dest=$(flagship_ssh "cat ~/.ohcommodore/fleet.json" | jq -r --arg n "$name" '.ships[$n].ssh_dest // empty')
+  [[ -n "$dest" ]] || die "Ship '$name' not found"
+
+  exec ssh -o StrictHostKeyChecking=accept-new "$dest"
+}
+
+cmd_fleet_sink() {
+  need_flagship
+  local force=false scuttle=false
+  for arg in "$@"; do
+    case "$arg" in
+      --force) force=true ;;
+      --scuttle) scuttle=true ;;
+    esac
+  done
+
+  local ships
+  ships=$(flagship_ssh 'cat ~/.ohcommodore/fleet.json' | jq -r '.ships | keys[]')
+
+  if [[ -z "$ships" ]]; then
+    echo "No ships to sink."
+    [[ "$scuttle" == true ]] || return 0
+  fi
+
+  if [[ -n "$ships" ]]; then
+    echo "WARNING: This will destroy all ships:"
+    echo "$ships" | while read -r name; do
+      local repo
+      repo=$(flagship_ssh 'cat ~/.ohcommodore/fleet.json' | jq -r --arg n "$name" '.ships[$n].repo')
+      echo "  - $name ($repo)"
+    done
+  fi
+
+  if [[ "$force" != true ]]; then
+    echo ""
+    printf "Type 'sink' to confirm: "
+    read -r confirm
+    [[ "$confirm" == "sink" ]] || die "Aborted."
+  fi
+
+  if [[ -n "$ships" ]]; then
+    echo "$ships" | while read -r name; do
+      log "Sinking $name..."
+      flagship_ssh "~/.ohcommodore/bin/ship-destroy '$name'" >/dev/null
+    done
+    log "Fleet sunk."
+  fi
+
+  if [[ "$scuttle" == true ]]; then
+    log "Scuttling flagship..."
+    ssh exe.dev rm "$(flagship_vm)" || true
+    rm -rf "$CONFIG_DIR"
+    log "Fleet decommissioned."
+  else
+    echo "Flagship still running."
+  fi
+}
+
+show_help() {
+  cat <<'HELP'
+ohcommodore - lightweight multi-agent control plane
+
+USAGE:
+  ohcommodore init                    Bootstrap flagship VM
+  ohcommodore fleet status            Show fleet status
+  ohcommodore fleet sink [--force] [--scuttle]  Destroy all ships (--force: skip confirmation, --scuttle: also flagship)
+  ohcommodore ship create <repo>      Create ship for owner/repo
+  ohcommodore ship destroy <name>     Destroy a ship
+  ohcommodore ship ssh <name>         SSH into a ship
+HELP
+}
+
+case "${1:-help}" in
+  -h|--help|help) show_help ;;
+  init) cmd_init ;;
+  fleet)
+    case "${2:-}" in
+      status) cmd_fleet_status ;;
+      sink) shift 2; cmd_fleet_sink "$@" ;;
+      *) die "Usage: ohcommodore fleet [status|sink]" ;;
+    esac ;;
+  ship)
+    case "${2:-}" in
+      create) cmd_ship_create "${3:-}" ;;
+      destroy) cmd_ship_destroy "${3:-}" ;;
+      ssh) cmd_ship_ssh "${3:-}" ;;
+      *) die "Usage: ohcommodore ship [create|destroy|ssh] <arg>" ;;
+    esac ;;
+  *) die "Unknown command: $1. Run 'ohcommodore help' for usage." ;;
+esac
