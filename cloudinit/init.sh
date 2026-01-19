@@ -21,7 +21,7 @@ sudo_apt_install() {
 
 log "Ensuring base deps exist..."
 # Keep this minimal but enough for everything below.
-sudo_apt_install ca-certificates curl git tar zsh
+sudo_apt_install ca-certificates curl git jq tar unzip zsh
 
 log "Installing GitHub CLI (gh) if missing..."
 if ! need_cmd gh; then
@@ -128,6 +128,180 @@ else
     log "No dotfiles repo found for $CHEZMOI_INIT_USER — skipping chezmoi setup"
   fi
 fi
+
+# ──────────────────────────────────────────────────────────
+# ohcaptain infrastructure (inbox + scheduler)
+# ──────────────────────────────────────────────────────────
+
+log "Installing DuckDB CLI..."
+if ! need_cmd duckdb; then
+  curl -fL -o /tmp/duckdb.zip \
+    https://github.com/duckdb/duckdb/releases/latest/download/duckdb_cli-linux-amd64.zip
+  unzip -o /tmp/duckdb.zip -d /tmp
+  sudo mv /tmp/duckdb /usr/local/bin/
+  sudo chmod +x /usr/local/bin/duckdb
+  rm /tmp/duckdb.zip
+else
+  log "DuckDB already installed — skipping"
+fi
+
+log "Setting up ohcaptain directories..."
+mkdir -p ~/.local/ohcaptain/bin
+export PATH="$HOME/.local/ohcaptain/bin:$PATH"
+
+log "Initializing ohcaptain database..."
+duckdb ~/.local/ohcaptain/data.duckdb "
+  CREATE TABLE IF NOT EXISTS config (
+    key TEXT PRIMARY KEY,
+    value TEXT
+  );
+  INSERT INTO config (key, value) VALUES ('POLL_INTERVAL_SEC', '10')
+    ON CONFLICT (key) DO NOTHING;
+
+  CREATE TABLE IF NOT EXISTS inbox (
+    id TEXT PRIMARY KEY,
+    created_at TEXT DEFAULT (datetime('now')),
+    status TEXT DEFAULT 'unread',
+    command TEXT,
+    exit_code INTEGER,
+    result TEXT,
+    error TEXT
+  );
+"
+
+log "Deploying ohcaptain-scheduler..."
+cat > ~/.local/ohcaptain/bin/ohcaptain-scheduler << 'SCHEDULER_EOF'
+#!/bin/bash
+set -uo pipefail
+
+DB=~/.local/ohcaptain/data.duckdb
+
+get_poll_interval() {
+  duckdb "$DB" -noheader -csv \
+    "SELECT value FROM config WHERE key = 'POLL_INTERVAL_SEC'" 2>/dev/null || echo "10"
+}
+
+while true; do
+  # Claim one unread message
+  msg=$(duckdb "$DB" -json "
+    UPDATE inbox SET status = 'running'
+    WHERE id = (SELECT id FROM inbox WHERE status = 'unread' LIMIT 1)
+    RETURNING id, command
+  " 2>/dev/null)
+
+  if [ -n "$msg" ] && [ "$msg" != "[]" ]; then
+    id=$(echo "$msg" | jq -r '.[0].id')
+    cmd=$(echo "$msg" | jq -r '.[0].command')
+
+    result=$(eval "$cmd" 2>&1)
+    exit_code=$?
+
+    # Escape single quotes in result for SQL
+    escaped_result=$(printf '%s' "$result" | sed "s/'/''/g")
+
+    if [ $exit_code -eq 0 ]; then
+      duckdb "$DB" "UPDATE inbox SET status='done', exit_code=$exit_code, result='$escaped_result' WHERE id='$id'"
+    else
+      duckdb "$DB" "UPDATE inbox SET status='error', exit_code=$exit_code, result='$escaped_result', error='Command failed with exit code $exit_code' WHERE id='$id'"
+    fi
+  fi
+
+  sleep "$(get_poll_interval)"
+done
+SCHEDULER_EOF
+chmod +x ~/.local/ohcaptain/bin/ohcaptain-scheduler
+
+log "Deploying ohcaptain-inbox CLI..."
+cat > ~/.local/ohcaptain/bin/ohcaptain-inbox << 'INBOX_EOF'
+#!/bin/bash
+set -uo pipefail
+
+DB=~/.local/ohcaptain/data.duckdb
+
+usage() {
+  echo "Usage: ohcaptain-inbox <command> [args]"
+  echo ""
+  echo "Commands:"
+  echo "  list [--status <status>]  List inbox messages"
+  echo "  send <command>            Send a command to the inbox"
+  echo "  read <id>                 Mark message as pending (claim it)"
+  echo "  done <id>                 Mark message as done"
+  echo "  error <id> <message>      Mark message as error"
+  echo "  delete <id>               Delete a message"
+  exit 1
+}
+
+[ $# -lt 1 ] && usage
+
+cmd="$1"
+shift
+
+case "$cmd" in
+  list)
+    status_filter=""
+    if [ "${1:-}" = "--status" ] && [ -n "${2:-}" ]; then
+      status_filter="WHERE status = '$2'"
+    fi
+    duckdb "$DB" -box "SELECT id, status, command, exit_code, created_at FROM inbox $status_filter ORDER BY created_at DESC"
+    ;;
+  send)
+    [ $# -lt 1 ] && { echo "Usage: ohcaptain-inbox send <command>"; exit 1; }
+    id=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)
+    escaped_cmd=$(printf '%s' "$1" | sed "s/'/''/g")
+    duckdb "$DB" "INSERT INTO inbox (id, command) VALUES ('$id', '$escaped_cmd')"
+    echo "Message queued: $id"
+    ;;
+  read)
+    [ $# -lt 1 ] && { echo "Usage: ohcaptain-inbox read <id>"; exit 1; }
+    duckdb "$DB" "UPDATE inbox SET status = 'pending' WHERE id = '$1'"
+    duckdb "$DB" -json "SELECT * FROM inbox WHERE id = '$1'"
+    ;;
+  done)
+    [ $# -lt 1 ] && { echo "Usage: ohcaptain-inbox done <id>"; exit 1; }
+    duckdb "$DB" "UPDATE inbox SET status = 'done' WHERE id = '$1'"
+    echo "Marked done: $1"
+    ;;
+  error)
+    [ $# -lt 2 ] && { echo "Usage: ohcaptain-inbox error <id> <message>"; exit 1; }
+    escaped_msg=$(printf '%s' "$2" | sed "s/'/''/g")
+    duckdb "$DB" "UPDATE inbox SET status = 'error', error = '$escaped_msg' WHERE id = '$1'"
+    echo "Marked error: $1"
+    ;;
+  delete)
+    [ $# -lt 1 ] && { echo "Usage: ohcaptain-inbox delete <id>"; exit 1; }
+    duckdb "$DB" "DELETE FROM inbox WHERE id = '$1'"
+    echo "Deleted: $1"
+    ;;
+  *)
+    usage
+    ;;
+esac
+INBOX_EOF
+chmod +x ~/.local/ohcaptain/bin/ohcaptain-inbox
+
+log "Creating systemd user service for scheduler..."
+mkdir -p ~/.config/systemd/user
+
+cat > ~/.config/systemd/user/ohcaptain-scheduler.service << 'SERVICE_EOF'
+[Unit]
+Description=ohcaptain inbox scheduler
+After=default.target
+
+[Service]
+ExecStart=%h/.local/ohcaptain/bin/ohcaptain-scheduler
+Restart=always
+RestartSec=5
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+
+[Install]
+WantedBy=default.target
+SERVICE_EOF
+
+systemctl --user daemon-reload
+systemctl --user enable ohcaptain-scheduler
+systemctl --user start ohcaptain-scheduler
+
+log "ohcaptain scheduler running and enabled on boot"
 
 log "Setting default login shell to zsh..."
 ZSH_PATH="$(command -v zsh || true)"

@@ -22,6 +22,19 @@ ssh_dest=$(echo "$create_json" | jq -r '.ssh_dest')
 [[ -n "$ssh_dest" && "$ssh_dest" != "null" ]] || { echo "ERROR: Failed to get ssh_dest" >&2; exit 1; }
 
 log "Ship VM created: $ssh_dest"
+
+# Wait for DNS to propagate
+log "Waiting for DNS..."
+hostname="${ssh_dest%%:*}"  # strip port if present
+for ((i=1; i<=10; i++)); do
+  if host "$hostname" >/dev/null 2>&1; then
+    log "DNS resolved: $hostname"
+    break
+  fi
+  log "DNS not ready ($i/10)..."
+  sleep 2
+done
+
 log "Waiting for SSH..."
 
 # Wait for SSH to be ready
