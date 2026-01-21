@@ -1143,6 +1143,35 @@ cmd__scheduler() {
   log "Scheduler shutting down gracefully"
 }
 
+cmd_queue_status() {
+  require_role commodore captain
+
+  queue_init_dirs  # Ensure dirs exist
+
+  local inbound_count claimed_count dead_count done_count msg_count
+
+  inbound_count=$(find "$(q_inbound)" -maxdepth 1 -name 'msg.*.json' 2>/dev/null | wc -l | tr -d ' ')
+  claimed_count=$(find "$(q_inbound)" -maxdepth 1 -name '.claimed.*.json' 2>/dev/null | wc -l | tr -d ' ')
+  dead_count=$(find "$(q_dead)" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
+  done_count=$(find "$(q_done)" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
+
+  if [[ -f "$(msg_db)" ]]; then
+    msg_count=$(duckdb "$(msg_db)" -noheader -csv "SELECT COUNT(*) FROM messages" 2>/dev/null || echo "0")
+  else
+    msg_count="0"
+  fi
+
+  echo "Queue Status (namespace: $(ns))"
+  echo "================================"
+  echo "  inbound: $inbound_count"
+  echo "  claimed: $claimed_count"
+  echo "  dead:    $dead_count"
+  echo "  done:    $done_count"
+  echo ""
+  echo "Database:"
+  echo "  messages: $msg_count"
+}
+
 show_help() {
   cat <<'HELP'
 ohcommodore - lightweight multi-agent control plane
@@ -1158,6 +1187,7 @@ USAGE:
   ohcommodore inbox send <rcpt> <cmd>      Send command to recipient
   ohcommodore inbox read|done|error|delete <id>  Manage messages
   ohcommodore inbox identity               Show this node's identity
+  ohcommodore queue status               Show v2 queue status
 
 HELP
 }
@@ -1179,6 +1209,11 @@ case "${1:-help}" in
       *) die "Usage: ohcommodore ship [create|destroy|ssh] <arg>" ;;
     esac ;;
   inbox) shift; cmd_inbox "$@" ;;
+  queue)
+    case "${2:-}" in
+      status) cmd_queue_status ;;
+      *) die "Usage: ohcommodore queue [status]" ;;
+    esac ;;
   _init_commodore) cmd__init_commodore ;;
   _init_captain) cmd__init_captain "${2:-}" ;;
   _scheduler) cmd__scheduler ;;
