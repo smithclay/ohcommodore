@@ -2,11 +2,11 @@
 # Integration test runner for ohcommodore
 #
 # Usage:
-#   GH_TOKEN=ghp_xxx ./tests/run_integration.sh           # Run all tests
-#   GH_TOKEN=ghp_xxx ./tests/run_integration.sh fleet     # Run fleet lifecycle test
-#   GH_TOKEN=ghp_xxx ./tests/run_integration.sh queue     # Run v2 queue test
+#   ./tests/run_integration.sh           # Run all tests (loads .env automatically)
+#   ./tests/run_integration.sh fleet     # Run fleet lifecycle test
+#   ./tests/run_integration.sh queue     # Run v2 queue test
 #
-# Environment:
+# Environment (auto-loaded from .env if present):
 #   GH_TOKEN    - Required: GitHub PAT for repo access
 #   TEST_REPO   - Optional: Repository to use for ship creation (default: smithclay/ohcommodore)
 #   KEEP_FLEET  - Optional: Set to "true" to skip cleanup on success (for debugging)
@@ -15,6 +15,23 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Load .env from project root if present (existing env vars take precedence)
+if [[ -f "$PROJECT_ROOT/.env" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$line" != *=* ]] && continue
+        key="${line%%=*}"
+        [[ -z "$key" ]] && continue
+        [[ -n "${!key+x}" ]] && continue
+        value="${line#*=}"
+        value="${value%\"}"
+        value="${value#\"}"
+        value="${value%\'}"
+        value="${value#\'}"
+        export "$key=$value"
+    done < "$PROJECT_ROOT/.env"
+fi
 
 # Colors
 RED='\033[0;31m'
