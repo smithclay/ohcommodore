@@ -46,6 +46,28 @@ generate_ship_id() {
   echo "${repo_name}-${suffix}"
 }
 
+resolve_ship_prefix() {
+  local prefix="$1"
+  local escaped_prefix
+  escaped_prefix=$(sql_escape "$prefix")
+
+  local matches
+  matches=$(duckdb "$(msg_db)" -csv -noheader "SELECT id FROM ships WHERE id LIKE '${escaped_prefix}%'" 2>/dev/null || echo "")
+
+  local count
+  if [[ -z "$matches" ]]; then
+    count=0
+  else
+    count=$(echo "$matches" | grep -c . || echo 0)
+  fi
+
+  case "$count" in
+    0) die "No ship matches '$prefix'" ;;
+    1) echo "$matches" ;;
+    *) die "Multiple ships match '$prefix':\n$matches" ;;
+  esac
+}
+
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
