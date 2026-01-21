@@ -792,22 +792,33 @@ _inbox_send() {
   fi
 
   local remote_host="${recipient#*@}"
-  local id
-  id=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)
-  local sender
-  sender=$(_inbox_identity)
-  local escaped_id
-  escaped_id=$(sql_escape "$id")
-  local escaped_sender
-  escaped_sender=$(sql_escape "$sender")
-  local escaped_cmd
-  escaped_cmd=$(sql_escape "$command")
+  local dest_ssh="exedev@$remote_host"
 
-  if ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes "exedev@$remote_host" \
-    "duckdb ~/.local/ship/data.duckdb \"INSERT INTO inbox (id, sender, recipient, command) VALUES ('$escaped_id', '$escaped_sender', '$recipient', '$escaped_cmd')\""; then
-    echo "Message sent: $id -> $recipient"
+  local request_id
+  request_id=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)
+
+  # Build cmd.exec payload
+  local payload_json
+  payload_json=$(jq -n \
+    --arg request_id "$request_id" \
+    --arg cmd "$command" \
+    '{
+      request_id: $request_id,
+      cmd: $cmd,
+      cwd: "~",
+      env: {},
+      timeout_s: 1800
+    }')
+
+  # Write message file
+  local msg_path
+  msg_path=$(write_msg_file "cmd.exec" "$recipient" "$payload_json")
+
+  # Deliver via SCP
+  if deliver_msg_file "$msg_path" "$dest_ssh"; then
+    echo "Message sent: $request_id -> $recipient"
   else
-    die "Failed to send message to $recipient (host may be unreachable)"
+    die "Failed to send message to $recipient"
   fi
 }
 
