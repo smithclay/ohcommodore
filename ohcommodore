@@ -48,6 +48,7 @@ q_inbound() { echo "$(q_root)/inbound"; }
 q_incoming() { echo "$(q_inbound)/.incoming"; }
 q_dead() { echo "$(q_root)/dead"; }
 q_done() { echo "$(q_root)/done"; }
+q_outbound() { echo "$(q_root)/outbound"; }
 artifacts_root() { echo "$(ns_root)/artifacts"; }
 
 queue_init_dirs() {
@@ -55,6 +56,7 @@ queue_init_dirs() {
   mkdir -p "$(q_incoming)"
   mkdir -p "$(q_dead)"
   mkdir -p "$(q_done)"
+  mkdir -p "$(q_outbound)"
   mkdir -p "$(artifacts_root)"
 }
 
@@ -76,6 +78,49 @@ init_messages_db() {
       handled_at TIMESTAMP
     );
   "
+}
+
+write_msg_file() {
+  local topic="$1"
+  local dest="$2"
+  local payload_json="$3"
+  local job_id="${4:-}"
+  local lease_token="${5:-}"
+
+  local msg_id ts source tmpfile finalfile
+  msg_id=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)
+  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  source=$(_inbox_identity 2>/dev/null || echo "unknown")
+
+  local outdir
+  outdir="$(q_outbound)"
+  mkdir -p "$outdir"
+
+  tmpfile="$outdir/msg.${ts//[:-]/}.${msg_id}.json.tmp"
+  finalfile="${tmpfile%.tmp}"
+
+  jq -n \
+    --arg msg_id "$msg_id" \
+    --arg created_at "$ts" \
+    --arg source "$source" \
+    --arg dest "$dest" \
+    --arg topic "$topic" \
+    --arg job_id "$job_id" \
+    --arg lease_token "$lease_token" \
+    --argjson payload "$payload_json" \
+    '{
+      message_id: $msg_id,
+      created_at: $created_at,
+      source: $source,
+      dest: $dest,
+      topic: $topic,
+      job_id: (if $job_id == "" then null else $job_id end),
+      lease_token: (if $lease_token == "" then null else $lease_token end),
+      payload: $payload
+    }' > "$tmpfile"
+
+  mv "$tmpfile" "$finalfile"
+  echo "$finalfile"
 }
 
 need_flagship() {
