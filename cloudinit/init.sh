@@ -178,11 +178,11 @@ SSHCONFIG
 fi
 
 log "Setting up ship directories..."
-mkdir -p ~/.local/ship
 mkdir -p ~/.local/bin
+mkdir -p ~/.ohcommodore/ns/default
 
 log "Initializing DuckDB SSH secrets..."
-duckdb ~/.local/ship/data.duckdb "
+duckdb ~/.ohcommodore/ns/default/data.duckdb "
   INSTALL sshfs FROM community;
   LOAD sshfs;
 

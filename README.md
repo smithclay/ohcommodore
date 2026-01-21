@@ -49,6 +49,15 @@ GH_TOKEN=ghp_xxx ./ohcommodore ship create owner/repo
 ./ohcommodore queue status
 ```
 
+## Inbox Commands
+
+```bash
+./ohcommodore inbox list
+./ohcommodore inbox send captain@ship-hostname "cargo test"
+./ohcommodore inbox read <id>
+./ohcommodore inbox identity
+```
+
 ## v2 Messaging
 
 Messages are NDJSON files delivered via SCP with atomic rename:
@@ -60,3 +69,5 @@ Messages are NDJSON files delivered via SCP with atomic rename:
 5. Execute, emit result, ack (delete) or deadletter
 
 No remote DuckDB writes. Single writer per node.
+
+All ship state (fleet registry, config, messages) lives in `~/.ohcommodore/ns/<namespace>/data.duckdb`.

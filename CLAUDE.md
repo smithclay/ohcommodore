@@ -34,7 +34,7 @@ Ships (exe.dev VMs, one per GitHub repo)
 
 **Local config:** `~/.ohcommodore/config.json` stores flagship SSH destination (local only)
 
-**VM state:** `~/.local/ship/data.duckdb` stores fleet registry (flagship) and inbox (all VMs)
+**VM state:** `~/.ohcommodore/ns/<namespace>/data.duckdb` stores fleet registry (flagship), local config, and messages.
 
 ## Commands
 
@@ -72,10 +72,7 @@ ohcommodore inbox send commodore@flagship-host "echo 'Report from ship'"
 ohcommodore inbox identity
 
 # Manual message management
-ohcommodore inbox read <id>        # Claim message (mark pending)
-ohcommodore inbox done <id>        # Mark as completed
-ohcommodore inbox error <id> "msg" # Mark as failed
-ohcommodore inbox delete <id>      # Remove message
+ohcommodore inbox read <id>        # Mark handled and return message JSON
 ```
 
 ## Environment Variables
@@ -101,20 +98,6 @@ When a ship is created, `cloudinit/init.sh` runs and installs:
 - Dotfiles via chezmoi
 - DuckDB CLI and inbox system (`ship-inbox`, `ship-scheduler`)
 
-## Inbox System
-
-The inbox enables asynchronous inter-ship communication via DuckDB databases.
-
-**Architecture:** Each ship has a local DuckDB database. When sending a message, the sender SSHs to the recipient host and executes a DuckDB INSERT command directly on their inbox table.
-
-**Components:**
-- `ship-inbox` - CLI for sending/managing messages (uses SSH for remote database access)
-- `ship-scheduler` - Background daemon that executes pending commands (systemd user service)
-
-**Message flow:** `unread` → `running` → `done`/`error`
-
-**Recipient format:** `captain@<hostname>` or `commodore@<hostname>`
-
 ## v2 Queue System
 
 The v2 messaging system replaces remote DuckDB writes with file-based NDJSON queue transport.
@@ -128,7 +111,6 @@ The v2 messaging system replaces remote DuckDB writes with file-based NDJSON que
 │   │   └── .incoming/     # Staging area for SCP
 │   ├── outbound/          # Outgoing messages
 │   ├── dead/              # Failed messages + .reason files
-│   └── done/              # Processed messages (optional)
 ├── artifacts/             # Command output files
 │   └── <request_id>/
 │       ├── stdout.txt

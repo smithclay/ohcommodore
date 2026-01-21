@@ -55,7 +55,7 @@ main() {
 
   # Get ship hostname
   local ship_dest
-  ship_dest=$("$PROJECT_ROOT/ohcommodore" fleet status 2>&1 | grep "$ship_name" | awk '{print $1}')
+  ship_dest=$("$PROJECT_ROOT/ohcommodore" fleet status 2>&1 | grep "^  ship-$ship_name" | awk '{print $1}')
   [[ -n "$ship_dest" ]] || { log_fail "Could not get ship destination"; return 1; }
 
   local ship_host="${ship_dest%%:*}"
@@ -78,7 +78,7 @@ main() {
   log_test "Checking queue status on flagship..."
 
   local queue_status
-  queue_status=$(ssh -o BatchMode=yes "$flagship_dest" '~/.local/bin/ohcommodore queue status' 2>&1)
+  queue_status=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$flagship_dest" '~/.local/bin/ohcommodore queue status' 2>&1)
 
   assert_contains "Queue status shows namespace" "$queue_status" "namespace:"
   assert_contains "Queue status shows inbound" "$queue_status" "inbound:"
@@ -89,7 +89,7 @@ main() {
   # ============================================
   log_test "Checking queue status on ship..."
 
-  queue_status=$(ssh -o BatchMode=yes "$ship_dest" '~/.local/bin/ohcommodore queue status' 2>&1)
+  queue_status=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ship_dest" '~/.local/bin/ohcommodore queue status' 2>&1)
 
   assert_contains "Ship queue status works" "$queue_status" "namespace:"
 
@@ -100,7 +100,7 @@ main() {
 
   # Get ship identity
   local ship_identity
-  ship_identity=$(ssh -o BatchMode=yes "$ship_dest" '~/.local/bin/ohcommodore inbox identity' 2>&1 | tr -d '\n')
+  ship_identity=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ship_dest" '~/.local/bin/ohcommodore inbox identity' 2>&1 | tr -d '\n')
 
   log_info "Ship identity: $ship_identity"
 
@@ -112,7 +112,7 @@ main() {
 
   # Send a test command
   local send_output
-  send_output=$(ssh -o BatchMode=yes "$flagship_dest" \
+  send_output=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$flagship_dest" \
     "~/.local/bin/ohcommodore inbox send '$ship_identity' 'echo QUEUE_TEST_SUCCESS'" 2>&1)
 
   assert_contains "Message sent" "$send_output" "Message sent:"
@@ -126,7 +126,7 @@ main() {
   sleep 3
 
   local inbound_files
-  inbound_files=$(ssh -o BatchMode=yes "$ship_dest" \
+  inbound_files=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ship_dest" \
     'ls ~/.ohcommodore/ns/default/q/inbound/*.json 2>/dev/null | wc -l' 2>&1 | tr -d ' ')
 
   assert "Message file exists in inbound" "[[ '$inbound_files' -ge 1 ]]"
@@ -137,7 +137,7 @@ main() {
   log_test "Processing message via scheduler..."
 
   # Run scheduler for a short time in background, then kill it
-  ssh -o BatchMode=yes "$ship_dest" '
+  ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ship_dest" '
     timeout 15 ~/.local/bin/ohcommodore _scheduler &
     SCHED_PID=$!
     sleep 10
@@ -151,7 +151,7 @@ main() {
 
   # Check messages table for handled message
   local handled_count
-  handled_count=$(ssh -o BatchMode=yes "$ship_dest" \
+  handled_count=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ship_dest" \
     "duckdb ~/.ohcommodore/ns/default/data.duckdb -noheader -csv \"SELECT COUNT(*) FROM messages WHERE handled_at IS NOT NULL\"" 2>&1 | tr -d ' ')
 
   assert "Message marked as handled" "[[ '$handled_count' -ge 1 ]]"
@@ -162,7 +162,7 @@ main() {
   log_test "Checking artifacts..."
 
   local artifacts
-  artifacts=$(ssh -o BatchMode=yes "$ship_dest" \
+  artifacts=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ship_dest" \
     'ls ~/.ohcommodore/ns/default/artifacts/*/stdout.txt 2>/dev/null | head -1' 2>&1)
 
   if [[ -n "$artifacts" && "$artifacts" != *"No such file"* ]]; then
@@ -172,7 +172,7 @@ main() {
 
     # Check if our test output is in the artifact
     local artifact_content
-    artifact_content=$(ssh -o BatchMode=yes "$ship_dest" "cat '$artifacts'" 2>&1)
+    artifact_content=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ship_dest" "cat '$artifacts'" 2>&1)
     assert_contains "Artifact contains test output" "$artifact_content" "QUEUE_TEST_SUCCESS"
   else
     log_fail "Artifacts not created"
@@ -186,7 +186,7 @@ main() {
   log_test "Checking inbox list..."
 
   local inbox_list
-  inbox_list=$(ssh -o BatchMode=yes "$ship_dest" \
+  inbox_list=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ship_dest" \
     '~/.local/bin/ohcommodore inbox list' 2>&1)
 
   assert_contains "Inbox list shows message" "$inbox_list" "cmd.exec"
@@ -197,7 +197,7 @@ main() {
   log_test "Checking for result message in outbound..."
 
   local outbound_files
-  outbound_files=$(ssh -o BatchMode=yes "$ship_dest" \
+  outbound_files=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ship_dest" \
     'ls ~/.ohcommodore/ns/default/q/outbound/*.json 2>/dev/null | wc -l' 2>&1 | tr -d ' ')
 
   # Result should be in outbound (may or may not have been delivered yet)
@@ -208,7 +208,7 @@ main() {
 
     # Check it's a cmd.result
     local result_topic
-    result_topic=$(ssh -o BatchMode=yes "$ship_dest" \
+    result_topic=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ship_dest" \
       'jq -r .topic ~/.ohcommodore/ns/default/q/outbound/*.json 2>/dev/null | head -1' 2>&1)
     assert_contains "Result has cmd.result topic" "$result_topic" "cmd.result"
   else

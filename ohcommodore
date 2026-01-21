@@ -571,7 +571,7 @@ _fleet_status_impl() {
   echo ""
 
   local fleet_data
-  fleet_data=$(duckdb ~/.local/ship/data.duckdb -noheader -csv "SELECT ssh_dest, repo, status, pubkey FROM fleet ORDER BY created_at" 2>/dev/null || echo "")
+  fleet_data=$(duckdb "$(msg_db)" -noheader -csv "SELECT ssh_dest, repo, status, pubkey FROM fleet ORDER BY created_at" 2>/dev/null || echo "")
 
   if [[ -z "$fleet_data" ]]; then
     echo "SHIPS: (none)"
@@ -710,7 +710,7 @@ _ship_create_impl() {
   escaped_dest=$(sql_escape "$ssh_dest")
   escaped_pubkey=$(sql_escape "$ship_pubkey")
 
-  duckdb ~/.local/ship/data.duckdb "
+  duckdb "$(msg_db)" "
     INSERT OR REPLACE INTO fleet (name, repo, ssh_dest, pubkey, status, created_at)
     VALUES ('$escaped_name', '$escaped_repo', '$escaped_dest', '$escaped_pubkey', 'running', current_timestamp);
   "
@@ -743,7 +743,7 @@ _ship_destroy_impl() {
   escaped_name=$(sql_escape "$name")
 
   local ship_pubkey
-  ship_pubkey=$(duckdb ~/.local/ship/data.duckdb -noheader -csv "SELECT pubkey FROM fleet WHERE name = '$escaped_name'" 2>/dev/null || echo "")
+  ship_pubkey=$(duckdb "$(msg_db)" -noheader -csv "SELECT pubkey FROM fleet WHERE name = '$escaped_name'" 2>/dev/null || echo "")
 
   log "Removing VM ship-${name}..."
   timeout 30 ssh exe.dev rm "ship-${name}" || log "Warning: VM removal timed out or failed"
@@ -754,7 +754,7 @@ _ship_destroy_impl() {
   fi
 
   log "Removing from fleet registry..."
-  duckdb ~/.local/ship/data.duckdb "DELETE FROM fleet WHERE name = '$escaped_name'"
+  duckdb "$(msg_db)" "DELETE FROM fleet WHERE name = '$escaped_name'"
 
   log "Ship '$name' destroyed."
 }
@@ -766,7 +766,7 @@ cmd_ship_ssh() {
 
   local escaped_name dest
   escaped_name=$(sql_escape "$name")
-  dest=$(flagship_ssh "duckdb ~/.local/ship/data.duckdb -noheader -csv \"SELECT ssh_dest FROM fleet WHERE name = '$escaped_name'\"" 2>/dev/null)
+  dest=$(flagship_ssh "duckdb ~/.ohcommodore/ns/${OHCOM_NS:-default}/data.duckdb -noheader -csv \"SELECT ssh_dest FROM fleet WHERE name = '$escaped_name'\"" 2>/dev/null)
   [[ -n "$dest" ]] || die "Ship '$name' not found"
 
   exec ssh -o StrictHostKeyChecking=accept-new "$dest"
@@ -809,7 +809,7 @@ _fleet_sink_impl() {
   local scuttle="$2"
 
   local fleet_data
-  fleet_data=$(duckdb ~/.local/ship/data.duckdb -noheader -csv "SELECT name, repo FROM fleet" 2>/dev/null || echo "")
+  fleet_data=$(duckdb "$(msg_db)" -noheader -csv "SELECT name, repo FROM fleet" 2>/dev/null || echo "")
 
   if [[ -z "$fleet_data" ]]; then
     echo "No ships to sink."
@@ -837,7 +837,9 @@ _fleet_sink_impl() {
     log "Scuttling flagship..."
     local flagship_pubkey
     flagship_pubkey=$(cat ~/.ssh/id_ed25519.pub 2>/dev/null || echo "")
-    _ship_destroy_impl "flagship-ohcommodore" >/dev/null
+    # Delete flagship VM directly (not via _ship_destroy_impl which prefixes with ship-)
+    log "Removing VM flagship-ohcommodore..."
+    timeout 30 ssh exe.dev rm "flagship-ohcommodore" || log "Warning: VM removal timed out or failed"
     if [[ -n "$flagship_pubkey" ]]; then
       timeout 30 ssh exe.dev ssh-key remove "$flagship_pubkey" 2>/dev/null || true
     fi
@@ -847,12 +849,18 @@ _fleet_sink_impl() {
   fi
 }
 
-_init_common_tables() {
+init_common() {
   local identity="$1"
+  local db
+  db="$(msg_db)"
+
+  queue_init_dirs
+  init_messages_db
+
   local escaped_identity
   escaped_identity=$(sql_escape "$identity")
 
-  duckdb ~/.local/ship/data.duckdb "
+  duckdb "$db" "
     CREATE TABLE IF NOT EXISTS config (
       key TEXT PRIMARY KEY,
       value TEXT
@@ -861,18 +869,6 @@ _init_common_tables() {
       ON CONFLICT (key) DO NOTHING;
     INSERT INTO config (key, value) VALUES ('IDENTITY', '$escaped_identity')
       ON CONFLICT (key) DO NOTHING;
-
-    CREATE TABLE IF NOT EXISTS inbox (
-      id TEXT PRIMARY KEY,
-      created_at TIMESTAMP DEFAULT current_timestamp,
-      status TEXT DEFAULT 'unread',
-      sender TEXT,
-      recipient TEXT NOT NULL,
-      command TEXT,
-      exit_code INTEGER,
-      result TEXT,
-      error TEXT
-    );
   "
 }
 
@@ -888,10 +884,12 @@ EOF
   log "Initializing databases..."
   local flagship_hostname
   flagship_hostname=$(hostname -f 2>/dev/null || hostname)
-  mkdir -p ~/.local/ship
+
+  # Create common config and v2 queue state
+  init_common "commodore@$flagship_hostname"
 
   # Create fleet table (commodore-only)
-  duckdb ~/.local/ship/data.duckdb "
+  duckdb "$(msg_db)" "
     CREATE TABLE IF NOT EXISTS fleet (
       name TEXT PRIMARY KEY,
       repo TEXT NOT NULL,
@@ -901,14 +899,6 @@ EOF
       created_at TIMESTAMP DEFAULT current_timestamp
     );
   "
-
-  # Create common tables (config and inbox)
-  _init_common_tables "commodore@$flagship_hostname"
-
-  # Initialize v2 queue system
-  log "Initializing v2 queue system..."
-  queue_init_dirs
-  init_messages_db
 
   log "Commodore initialized."
 }
@@ -938,19 +928,11 @@ EOF
     "SHIP_SSH_PRIVKEY_B64=${SHIP_SSH_PRIVKEY_B64:-}" \
     "SHIP_SSH_PUBKEY_B64=${SHIP_SSH_PUBKEY_B64:-}"
 
-  # Initialize inbox database
-  log "Initializing inbox database..."
   local ship_hostname
   ship_hostname=$(hostname -f 2>/dev/null || hostname)
-  mkdir -p ~/.local/ship
 
-  # Create common tables (config and inbox)
-  _init_common_tables "captain@$ship_hostname"
-
-  # Initialize v2 queue system
-  log "Initializing v2 queue system..."
-  queue_init_dirs
-  init_messages_db
+  # Create common config and v2 queue state
+  init_common "captain@$ship_hostname"
 
   log "Captain initialized${repo:+ for $repo}."
 }
@@ -965,11 +947,8 @@ cmd_inbox() {
     list) _inbox_list "$@" ;;
     send) _inbox_send "$@" ;;
     read) _inbox_read "$@" ;;
-    done) _inbox_done "$@" ;;
-    error) _inbox_error "$@" ;;
-    delete) _inbox_delete "$@" ;;
     identity) _inbox_identity ;;
-    *) die "Usage: ohcommodore inbox [list|send|read|done|error|delete|identity]" ;;
+    *) die "Usage: ohcommodore inbox [list|send|read|identity]" ;;
   esac
 }
 
@@ -989,25 +968,20 @@ _inbox_list() {
     esac
   fi
 
-  # Try v2 messages table first, fall back to legacy inbox
-  if [[ -f "$(msg_db)" ]]; then
-    duckdb "$(msg_db)" -box "
-      SELECT
-        message_id as id,
-        CASE WHEN handled_at IS NULL THEN 'unread' ELSE 'done' END as status,
-        source as sender,
-        dest as recipient,
-        topic,
-        substr(payload_json, 1, 50) as payload_preview,
-        created_at
-      FROM messages
-      $status_filter
-      ORDER BY created_at DESC
-    "
-  else
-    # Legacy fallback
-    duckdb ~/.local/ship/data.duckdb -box "SELECT id, status, sender, recipient, command, exit_code, created_at FROM inbox $status_filter ORDER BY created_at DESC"
-  fi
+  [[ -f "$(msg_db)" ]] || die "Messages DB not initialized"
+  duckdb "$(msg_db)" -box "
+    SELECT
+      message_id as id,
+      CASE WHEN handled_at IS NULL THEN 'unread' ELSE 'done' END as status,
+      source as sender,
+      dest as recipient,
+      topic,
+      substr(payload_json, 1, 50) as payload_preview,
+      created_at
+    FROM messages
+    $status_filter
+    ORDER BY created_at DESC
+  "
 }
 
 _inbox_send() {
@@ -1056,44 +1030,13 @@ _inbox_read() {
   local escaped_id
   escaped_id=$(sql_escape "$msg_id")
 
-  if [[ -f "$(msg_db)" ]]; then
-    # v2: update handled_at and return message
-    duckdb "$(msg_db)" "UPDATE messages SET handled_at = current_timestamp WHERE message_id = '$escaped_id' AND handled_at IS NULL"
-    duckdb "$(msg_db)" -json "SELECT * FROM messages WHERE message_id = '$escaped_id'"
-  else
-    # Legacy fallback
-    duckdb ~/.local/ship/data.duckdb "UPDATE inbox SET status = 'pending' WHERE id = '$escaped_id'"
-    duckdb ~/.local/ship/data.duckdb -json "SELECT * FROM inbox WHERE id = '$escaped_id'"
-  fi
-}
-
-_inbox_done() {
-  [[ $# -ge 1 ]] || die "Usage: ohcommodore inbox done <id>"
-  local escaped_id
-  escaped_id=$(sql_escape "$1")
-  duckdb ~/.local/ship/data.duckdb "UPDATE inbox SET status = 'done' WHERE id = '$escaped_id'"
-  echo "Marked done: $1"
-}
-
-_inbox_error() {
-  [[ $# -ge 2 ]] || die "Usage: ohcommodore inbox error <id> <message>"
-  local escaped_id escaped_msg
-  escaped_id=$(sql_escape "$1")
-  escaped_msg=$(sql_escape "$2")
-  duckdb ~/.local/ship/data.duckdb "UPDATE inbox SET status = 'error', error = '$escaped_msg' WHERE id = '$escaped_id'"
-  echo "Marked error: $1"
-}
-
-_inbox_delete() {
-  [[ $# -ge 1 ]] || die "Usage: ohcommodore inbox delete <id>"
-  local escaped_id
-  escaped_id=$(sql_escape "$1")
-  duckdb ~/.local/ship/data.duckdb "DELETE FROM inbox WHERE id = '$escaped_id'"
-  echo "Deleted: $1"
+  [[ -f "$(msg_db)" ]] || die "Messages DB not initialized"
+  duckdb "$(msg_db)" "UPDATE messages SET handled_at = current_timestamp WHERE message_id = '$escaped_id' AND handled_at IS NULL"
+  duckdb "$(msg_db)" -json "SELECT * FROM messages WHERE message_id = '$escaped_id'"
 }
 
 _inbox_identity() {
-  duckdb ~/.local/ship/data.duckdb -noheader -csv "SELECT value FROM config WHERE key = 'IDENTITY'" 2>/dev/null
+  duckdb "$(msg_db)" -noheader -csv "SELECT value FROM config WHERE key = 'IDENTITY'" 2>/dev/null
 }
 
 cmd__scheduler() {
@@ -1104,7 +1047,7 @@ cmd__scheduler() {
   init_messages_db
 
   local poll_interval
-  poll_interval=$(duckdb ~/.local/ship/data.duckdb -noheader -csv "SELECT value FROM config WHERE key = 'POLL_INTERVAL_SEC'" 2>/dev/null || echo "10")
+  poll_interval=$(duckdb "$(msg_db)" -noheader -csv "SELECT value FROM config WHERE key = 'POLL_INTERVAL_SEC'" 2>/dev/null || echo "10")
   local identity
   identity=$(_inbox_identity)
   [[ -n "$identity" ]] || die "No IDENTITY in config"
@@ -1185,7 +1128,7 @@ USAGE:
   ohcommodore ship ssh <name>              SSH into a ship
   ohcommodore inbox list [--status <s>]    List inbox messages
   ohcommodore inbox send <rcpt> <cmd>      Send command to recipient
-  ohcommodore inbox read|done|error|delete <id>  Manage messages
+  ohcommodore inbox read <id>              Read and mark handled
   ohcommodore inbox identity               Show this node's identity
   ohcommodore queue status               Show v2 queue status
 

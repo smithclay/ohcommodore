@@ -101,10 +101,10 @@ main() {
 
   # Get ship hostname from fleet
   local ship_dest
-  ship_dest=$("$PROJECT_ROOT/ohcommodore" fleet status 2>&1 | grep "$ship_name" | awk '{print $1}')
+  ship_dest=$("$PROJECT_ROOT/ohcommodore" fleet status 2>&1 | grep "^  ship-$ship_name" | awk '{print $1}')
 
   if [[ -n "$ship_dest" ]]; then
-    assert_success "Can SSH to ship" "ssh -o BatchMode=yes -o ConnectTimeout=10 '$ship_dest' 'echo ok'"
+    assert_success "Can SSH to ship" "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 '$ship_dest' 'echo ok'"
   else
     log_fail "Could not determine ship destination"
   fi
@@ -115,7 +115,7 @@ main() {
   log_test "Checking v2 queue initialization on ship..."
 
   local queue_check
-  queue_check=$(ssh -o BatchMode=yes "$ship_dest" 'ls -la ~/.ohcommodore/ns/default/q/ 2>/dev/null' || echo "")
+  queue_check=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ship_dest" 'ls -la ~/.ohcommodore/ns/default/q/ 2>/dev/null' || echo "")
 
   assert_contains "Ship has inbound queue" "$queue_check" "inbound"
   assert_contains "Ship has dead queue" "$queue_check" "dead"
