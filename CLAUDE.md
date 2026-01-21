@@ -53,27 +53,29 @@ GH_TOKEN=... ./ohcommodore ship create owner/repo
 ./ohcommodore ship destroy reponame
 ```
 
-### Inbox Commands (run on ships via `ship-inbox`)
+### Inbox Commands
+
+Run these commands on a ship (via `ohcommodore ship ssh <ship-name>`):
 
 ```bash
 # List inbox messages
-ship-inbox list
-ship-inbox list --status done
+ohcommodore inbox list
+ohcommodore inbox list --status done
 
 # Send a command to another ship
-ship-inbox send captain@other-ship "cargo test"
+ohcommodore inbox send captain@other-ship "cargo test"
 
-# Send a command to the commodore (note: commands are executed as shell commands)
-ship-inbox send commodore@flagship-host "echo 'Report from ship: all systems operational'"
+# Send a command to commodore
+ohcommodore inbox send commodore@flagship-host "echo 'Report from ship'"
 
 # Get this ship's identity
-ship-inbox identity
+ohcommodore inbox identity
 
 # Manual message management
-ship-inbox read <id>       # Claim message (mark pending)
-ship-inbox done <id>       # Mark as completed
-ship-inbox error <id> "msg" # Mark as failed
-ship-inbox delete <id>     # Remove message
+ohcommodore inbox read <id>        # Claim message (mark pending)
+ohcommodore inbox done <id>        # Mark as completed
+ohcommodore inbox error <id> "msg" # Mark as failed
+ohcommodore inbox delete <id>      # Remove message
 ```
 
 ## Environment Variables

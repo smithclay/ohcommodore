@@ -39,6 +39,17 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
 
+# Namespace helpers (v2 queue system)
+ns() { echo "${OHCOM_NS:-default}"; }
+ns_root() { echo "$HOME/.ohcommodore/ns/$(ns)"; }
+msg_db() { echo "$(ns_root)/data.duckdb"; }
+q_root() { echo "$(ns_root)/q"; }
+q_inbound() { echo "$(q_root)/inbound"; }
+q_incoming() { echo "$(q_inbound)/.incoming"; }
+q_dead() { echo "$(q_root)/dead"; }
+q_done() { echo "$(q_root)/done"; }
+artifacts_root() { echo "$(ns_root)/artifacts"; }
+
 need_flagship() {
   [[ -f "$CONFIG_FILE" ]] || die "No flagship configured. Run: ohcommodore init"
 }
