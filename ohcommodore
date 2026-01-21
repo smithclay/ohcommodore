@@ -132,19 +132,22 @@ deliver_msg_file() {
   filename=$(basename "$local_path")
 
   local remote_incoming remote_inbound
-  remote_incoming='$HOME/.ohcommodore/ns/default/q/inbound/.incoming'
-  remote_inbound='$HOME/.ohcommodore/ns/default/q/inbound'
+  # Use ~ for scp (expands on remote side), $HOME for ssh commands
+  remote_incoming='~/.ohcommodore/ns/default/q/inbound/.incoming'
+  remote_inbound='~/.ohcommodore/ns/default/q/inbound'
 
   local attempt=1
   local delay=1
 
+  local ssh_opts="-o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+
   while [[ $attempt -le $max_retries ]]; do
     # Ensure remote directories exist
-    if ssh -o BatchMode=yes "$dest_ssh" "mkdir -p $remote_incoming $remote_inbound" 2>/dev/null; then
+    if ssh $ssh_opts "$dest_ssh" "mkdir -p $remote_incoming $remote_inbound" 2>/dev/null; then
       # SCP to .incoming (staging)
-      if scp -q "$local_path" "${dest_ssh}:${remote_incoming}/${filename}" 2>/dev/null; then
+      if scp -q -o StrictHostKeyChecking=accept-new "$local_path" "${dest_ssh}:${remote_incoming}/${filename}" 2>/dev/null; then
         # Atomic rename to publish
-        if ssh -o BatchMode=yes "$dest_ssh" "mv ${remote_incoming}/${filename} ${remote_inbound}/${filename}" 2>/dev/null; then
+        if ssh $ssh_opts "$dest_ssh" "mv ${remote_incoming}/${filename} ${remote_inbound}/${filename}" 2>/dev/null; then
           rm -f "$local_path"
           return 0
         fi
@@ -784,19 +787,27 @@ cmd_fleet_sink() {
   case "$(get_role)" in
     local)
       need_flagship
+      local flagship_dest
+      flagship_dest=$(jq -r '.flagship' "$CONFIG_FILE")
+
+      # Sink ships on flagship (never pass --scuttle to flagship - we handle it locally)
       local args=""
       [[ "$force" == true ]] && args="$args --force"
-      [[ "$scuttle" == true ]] && args="$args --scuttle"
+      flagship_ssh "~/.local/bin/ohcommodore fleet sink $args"
+
       if [[ "$scuttle" == true ]]; then
-        flagship_ssh "~/.local/bin/ohcommodore fleet sink $args"
+        # Delete flagship VM directly from local (flagship can't delete itself)
+        log "Scuttling flagship from local..."
+        log "Removing VM flagship-ohcommodore..."
+        timeout 30 ssh exe.dev rm "flagship-ohcommodore" || log "Warning: VM removal timed out or failed"
+        log "Fleet decommissioned."
         log "Removing local config..."
         rm -rf "$CONFIG_DIR"
-      else
-        flagship_ssh "~/.local/bin/ohcommodore fleet sink $args"
       fi
       ;;
     commodore)
-      _fleet_sink_impl "$force" "$scuttle"
+      # On flagship, only sink ships - scuttle is handled by local CLI
+      _fleet_sink_impl "$force" false
       ;;
     captain)
       die "Fleet sink not available from ships"
@@ -806,7 +817,7 @@ cmd_fleet_sink() {
 
 _fleet_sink_impl() {
   local force="$1"
-  local scuttle="$2"
+  # Note: scuttle is handled by local CLI, not here
 
   local fleet_data
   fleet_data=$(duckdb "$(msg_db)" -noheader -csv "SELECT name, repo FROM fleet" 2>/dev/null || echo "")
@@ -833,20 +844,7 @@ _fleet_sink_impl() {
     log "Fleet sunk."
   fi
 
-  if [[ "$scuttle" == true ]]; then
-    log "Scuttling flagship..."
-    local flagship_pubkey
-    flagship_pubkey=$(cat ~/.ssh/id_ed25519.pub 2>/dev/null || echo "")
-    # Delete flagship VM directly (not via _ship_destroy_impl which prefixes with ship-)
-    log "Removing VM flagship-ohcommodore..."
-    timeout 30 ssh exe.dev rm "flagship-ohcommodore" || log "Warning: VM removal timed out or failed"
-    if [[ -n "$flagship_pubkey" ]]; then
-      timeout 30 ssh exe.dev ssh-key remove "$flagship_pubkey" 2>/dev/null || true
-    fi
-    log "Fleet decommissioned."
-  else
-    echo "Flagship still running."
-  fi
+  echo "Flagship still running."
 }
 
 init_common() {

@@ -128,6 +128,7 @@ main() {
   local inbound_files
   inbound_files=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ship_dest" \
     'ls ~/.ohcommodore/ns/default/q/inbound/*.json 2>/dev/null | wc -l' 2>&1 | tr -d ' ')
+  inbound_files="${inbound_files:-0}"
 
   assert "Message file exists in inbound" "[[ '$inbound_files' -ge 1 ]]"
 
@@ -153,6 +154,7 @@ main() {
   local handled_count
   handled_count=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ship_dest" \
     "duckdb ~/.ohcommodore/ns/default/data.duckdb -noheader -csv \"SELECT COUNT(*) FROM messages WHERE handled_at IS NOT NULL\"" 2>&1 | tr -d ' ')
+  handled_count="${handled_count:-0}"
 
   assert "Message marked as handled" "[[ '$handled_count' -ge 1 ]]"
 
@@ -199,6 +201,7 @@ main() {
   local outbound_files
   outbound_files=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ship_dest" \
     'ls ~/.ohcommodore/ns/default/q/outbound/*.json 2>/dev/null | wc -l' 2>&1 | tr -d ' ')
+  outbound_files="${outbound_files:-0}"
 
   # Result should be in outbound (may or may not have been delivered yet)
   if [[ "$outbound_files" -ge 1 ]]; then
