@@ -35,6 +35,10 @@ sql_escape() {
   printf '%s' "$1" | sed "s/'/''/g"
 }
 
+uuid_gen() {
+  uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid
+}
+
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
@@ -47,7 +51,6 @@ q_root() { echo "$(ns_root)/q"; }
 q_inbound() { echo "$(q_root)/inbound"; }
 q_incoming() { echo "$(q_inbound)/.incoming"; }
 q_dead() { echo "$(q_root)/dead"; }
-q_done() { echo "$(q_root)/done"; }
 q_outbound() { echo "$(q_root)/outbound"; }
 artifacts_root() { echo "$(ns_root)/artifacts"; }
 
@@ -55,7 +58,6 @@ queue_init_dirs() {
   mkdir -p "$(q_inbound)"
   mkdir -p "$(q_incoming)"
   mkdir -p "$(q_dead)"
-  mkdir -p "$(q_done)"
   mkdir -p "$(q_outbound)"
   mkdir -p "$(artifacts_root)"
 }
@@ -88,7 +90,7 @@ write_msg_file() {
   local lease_token="${5:-}"
 
   local msg_id ts source tmpfile finalfile
-  msg_id=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)
+  msg_id=$(uuid_gen)
   ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   source=$(_inbox_identity 2>/dev/null || echo "unknown")
 
@@ -133,34 +135,40 @@ deliver_msg_file() {
 
   local remote_incoming remote_inbound
   # Use ~ for scp (expands on remote side), $HOME for ssh commands
-  remote_incoming='~/.ohcommodore/ns/default/q/inbound/.incoming'
-  remote_inbound='~/.ohcommodore/ns/default/q/inbound'
+  remote_incoming="~/.ohcommodore/ns/$(ns)/q/inbound/.incoming"
+  remote_inbound="~/.ohcommodore/ns/$(ns)/q/inbound"
 
   local attempt=1
   local delay=1
 
   local ssh_opts="-o BatchMode=yes -o StrictHostKeyChecking=accept-new"
 
+  local last_err=""
   while [[ $attempt -le $max_retries ]]; do
     # Ensure remote directories exist
-    if ssh $ssh_opts "$dest_ssh" "mkdir -p $remote_incoming $remote_inbound" 2>/dev/null; then
+    if last_err=$(ssh $ssh_opts "$dest_ssh" "mkdir -p $remote_incoming $remote_inbound" 2>&1); then
       # SCP to .incoming (staging)
-      if scp -q -o StrictHostKeyChecking=accept-new "$local_path" "${dest_ssh}:${remote_incoming}/${filename}" 2>/dev/null; then
+      if last_err=$(scp -q -o StrictHostKeyChecking=accept-new "$local_path" "${dest_ssh}:${remote_incoming}/${filename}" 2>&1); then
         # Atomic rename to publish
-        if ssh $ssh_opts "$dest_ssh" "mv ${remote_incoming}/${filename} ${remote_inbound}/${filename}" 2>/dev/null; then
+        if last_err=$(ssh $ssh_opts "$dest_ssh" "mv ${remote_incoming}/${filename} ${remote_inbound}/${filename}" 2>&1); then
           rm -f "$local_path"
           return 0
+        else
+          log "Delivery attempt $attempt/$max_retries: mv failed: $last_err"
         fi
+      else
+        log "Delivery attempt $attempt/$max_retries: scp failed: $last_err"
       fi
+    else
+      log "Delivery attempt $attempt/$max_retries: ssh mkdir failed: $last_err"
     fi
 
-    log "Delivery attempt $attempt/$max_retries failed, retrying in ${delay}s..."
     sleep "$delay"
     delay=$((delay * 2))
     attempt=$((attempt + 1))
   done
 
-  log "ERROR: Failed to deliver message after $max_retries attempts"
+  log "ERROR: Failed to deliver message after $max_retries attempts. Last error: $last_err"
   return 1
 }
 
@@ -191,23 +199,24 @@ ingest_queue_file() {
   esc_payload=$(sql_escape "$payload_json")
 
   # Insert with ON CONFLICT for idempotency
-  if duckdb "$db" "
+  local db_err
+  if db_err=$(duckdb "$db" "
     INSERT INTO messages (message_id, created_at, source, dest, topic, job_id, lease_token, payload_json)
     VALUES ('$esc_msg_id', '$created_at', '$esc_source', '$esc_dest', '$esc_topic',
             $([ -n "$job_id" ] && echo "'$esc_job_id'" || echo "NULL"),
             $([ -n "$lease_token" ] && echo "'$esc_lease_token'" || echo "NULL"),
             '$esc_payload')
     ON CONFLICT (message_id) DO NOTHING;
-  " 2>/dev/null; then
+  " 2>&1); then
     # Ack: remove file
     rm -f "$file_path"
   else
-    # Deadletter: move to dead queue with reason
+    # Deadletter: move to dead queue with reason (include actual error)
     local filename
     filename=$(basename "$file_path")
     mv "$file_path" "$(q_dead)/$filename"
-    echo "DuckDB insert failed" > "$(q_dead)/${filename%.json}.reason"
-    die "Failed to ingest message $msg_id - moved to deadletter"
+    echo "DuckDB insert failed: $db_err" > "$(q_dead)/${filename%.json}.reason"
+    die "Failed to ingest message $msg_id: $db_err"
   fi
 }
 
@@ -340,22 +349,30 @@ daemon_process_one() {
   claimed_file=$(daemon_claim_one) || return 1
 
   # Ingest into database
-  ingest_queue_file "$claimed_file" 2>/dev/null || {
-    # Already handled in ingest_queue_file (deadlettered)
+  local ingest_err
+  if ! ingest_err=$(ingest_queue_file "$claimed_file" 2>&1); then
+    log "Failed to ingest claimed file: $claimed_file"
     return 1
-  }
+  fi
+
+  # Escape identity for SQL query (prevent injection)
+  local escaped_identity
+  escaped_identity=$(sql_escape "$my_identity")
 
   # Find unhandled cmd.exec messages for us
-  local msg_row
-  msg_row=$(duckdb "$(msg_db)" -json "
+  local msg_row db_err
+  if ! msg_row=$(duckdb "$(msg_db)" -json "
     SELECT message_id, payload_json
     FROM messages
-    WHERE dest = '$my_identity'
+    WHERE dest = '$escaped_identity'
       AND topic = 'cmd.exec'
       AND handled_at IS NULL
     ORDER BY created_at
     LIMIT 1
-  " 2>/dev/null)
+  " 2>&1); then
+    log "ERROR: Failed to query messages database: $msg_row"
+    return 1
+  fi
 
   [[ -n "$msg_row" && "$msg_row" != "[]" ]] || return 0
 
@@ -363,13 +380,18 @@ daemon_process_one() {
   msg_id=$(echo "$msg_row" | jq -r '.[0].message_id')
   payload_json=$(echo "$msg_row" | jq -r '.[0].payload_json')
 
+  # SECURITY NOTE: Commands from inbox are executed without sanitization.
+  # This is intentional - the inbox system is designed to execute arbitrary commands.
+  # Ensure the inbox queue is only writable by trusted sources (SSH key authentication).
   cmd=$(echo "$payload_json" | jq -r '.cmd')
   cwd=$(echo "$payload_json" | jq -r '.cwd // "~"')
   timeout_s=$(echo "$payload_json" | jq -r '.timeout_s // 1800')
   request_id=$(echo "$payload_json" | jq -r '.request_id // empty')
 
-  # Get source for reply
-  source=$(duckdb "$(msg_db)" -noheader -csv "SELECT source FROM messages WHERE message_id='$msg_id'" 2>/dev/null)
+  # Get source for reply (escape msg_id to prevent SQL injection)
+  local escaped_msg_id
+  escaped_msg_id=$(sql_escape "$msg_id")
+  source=$(duckdb "$(msg_db)" -noheader -csv "SELECT source FROM messages WHERE message_id='$escaped_msg_id'")
 
   # Create artifact directory
   local artifact_dir started_at ended_at
@@ -388,8 +410,8 @@ daemon_process_one() {
   echo "$result" > "$artifact_dir/stdout.txt"
   echo "" > "$artifact_dir/stderr.txt"  # stderr captured in stdout via 2>&1
 
-  # Mark as handled
-  duckdb "$(msg_db)" "UPDATE messages SET handled_at = current_timestamp WHERE message_id = '$msg_id'"
+  # Mark as handled (use escaped_msg_id from earlier)
+  duckdb "$(msg_db)" "UPDATE messages SET handled_at = current_timestamp WHERE message_id = '$escaped_msg_id'"
 
   # Emit result (but don't deliver in this function - let caller handle)
   if [[ -n "$source" ]]; then
@@ -995,7 +1017,7 @@ _inbox_send() {
   local dest_ssh="exedev@$remote_host"
 
   local request_id
-  request_id=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)
+  request_id=$(uuid_gen)
 
   # Build cmd.exec payload
   local payload_json
@@ -1060,7 +1082,7 @@ cmd__scheduler() {
 
   while [[ $DAEMON_SHUTDOWN -eq 0 ]]; do
     # Process all pending messages
-    while daemon_process_one "$identity" 2>/dev/null; do
+    while daemon_process_one "$identity"; do
       [[ $DAEMON_SHUTDOWN -eq 0 ]] || break
     done
 
@@ -1072,8 +1094,8 @@ cmd__scheduler() {
         [[ -f "$result_file" ]] || continue
         dest_host=$(jq -r '.dest' "$result_file" | cut -d'@' -f2)
         dest_ssh="exedev@$dest_host"
-        deliver_msg_file "$result_file" "$dest_ssh" 3 2>/dev/null || {
-          log "Warning: Failed to deliver result to $dest_host"
+        deliver_msg_file "$result_file" "$dest_ssh" 3 || {
+          log "Warning: Failed to deliver result to $dest_host (see errors above)"
         }
       done
     fi
@@ -1089,12 +1111,11 @@ cmd_queue_status() {
 
   queue_init_dirs  # Ensure dirs exist
 
-  local inbound_count claimed_count dead_count done_count msg_count
+  local inbound_count claimed_count dead_count msg_count
 
   inbound_count=$(find "$(q_inbound)" -maxdepth 1 -name 'msg.*.json' 2>/dev/null | wc -l | tr -d ' ')
   claimed_count=$(find "$(q_inbound)" -maxdepth 1 -name '.claimed.*.json' 2>/dev/null | wc -l | tr -d ' ')
   dead_count=$(find "$(q_dead)" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
-  done_count=$(find "$(q_done)" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
 
   if [[ -f "$(msg_db)" ]]; then
     msg_count=$(duckdb "$(msg_db)" -noheader -csv "SELECT COUNT(*) FROM messages" 2>/dev/null || echo "0")
@@ -1107,7 +1128,6 @@ cmd_queue_status() {
   echo "  inbound: $inbound_count"
   echo "  claimed: $claimed_count"
   echo "  dead:    $dead_count"
-  echo "  done:    $done_count"
   echo ""
   echo "Database:"
   echo "  messages: $msg_count"

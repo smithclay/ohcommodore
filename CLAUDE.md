@@ -96,11 +96,21 @@ When a ship is created, `cloudinit/init.sh` runs and installs:
 - Rust toolchain via rustup
 - Oh My Zsh with zsh as default shell
 - Dotfiles via chezmoi
-- DuckDB CLI and inbox system (`ship-inbox`, `ship-scheduler`)
+- DuckDB CLI and v2 queue system (scheduler via `ohcommodore _scheduler`)
 
 ## v2 Queue System
 
 The v2 messaging system replaces remote DuckDB writes with file-based NDJSON queue transport.
+
+### Security Considerations
+
+**Command Execution:** The inbox system executes commands from `cmd.exec` messages without sanitization. This is by design - the system is intended to run arbitrary commands from trusted sources. Security relies on:
+
+1. **SSH key authentication**: Only nodes with registered SSH keys can deliver messages to the queue
+2. **SCP delivery**: Messages arrive via SCP, which requires valid SSH credentials
+3. **Network isolation**: exe.dev VMs are not publicly accessible
+
+**Do not expose the inbox system to untrusted sources.** Any entity that can write to `~/.ohcommodore/ns/*/q/inbound/` can execute arbitrary commands.
 
 ### Directory Layout (per namespace)
 
@@ -109,8 +119,9 @@ The v2 messaging system replaces remote DuckDB writes with file-based NDJSON que
 ├── q/
 │   ├── inbound/           # Incoming messages (visible)
 │   │   └── .incoming/     # Staging area for SCP
-│   ├── outbound/          # Outgoing messages
+│   ├── outbound/          # Outgoing messages pending delivery
 │   ├── dead/              # Failed messages + .reason files
+│   └── done/              # Successfully processed messages
 ├── artifacts/             # Command output files
 │   └── <request_id>/
 │       ├── stdout.txt
