@@ -58,6 +58,26 @@ queue_init_dirs() {
   mkdir -p "$(artifacts_root)"
 }
 
+init_messages_db() {
+  local db
+  db="$(msg_db)"
+  mkdir -p "$(dirname "$db")"
+  duckdb "$db" "
+    CREATE TABLE IF NOT EXISTS messages (
+      message_id TEXT PRIMARY KEY,
+      created_at TIMESTAMP NOT NULL,
+      source TEXT NOT NULL,
+      dest TEXT NOT NULL,
+      topic TEXT NOT NULL,
+      job_id TEXT,
+      lease_token TEXT,
+      payload_json TEXT NOT NULL,
+      ingested_at TIMESTAMP DEFAULT current_timestamp,
+      handled_at TIMESTAMP
+    );
+  "
+}
+
 need_flagship() {
   [[ -f "$CONFIG_FILE" ]] || die "No flagship configured. Run: ohcommodore init"
 }
