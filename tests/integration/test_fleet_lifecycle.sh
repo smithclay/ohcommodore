@@ -99,9 +99,9 @@ main() {
   # ============================================
   log_test "Testing SSH to ship..."
 
-  # Get ship hostname from fleet
+  # Get ship SSH destination from fleet (SHIP column contains id like "reponame-abc123", SSH_DEST is column 3)
   local ship_dest
-  ship_dest=$("$PROJECT_ROOT/ohcommodore" fleet status 2>&1 | grep "^  ship-$ship_name" | awk '{print $1}')
+  ship_dest=$("$PROJECT_ROOT/ohcommodore" fleet status 2>&1 | grep "^  $ship_name-" | awk '{print $3}')
 
   if [[ -n "$ship_dest" ]]; then
     assert_success "Can SSH to ship" "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 '$ship_dest' 'echo ok'"

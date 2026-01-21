@@ -624,31 +624,19 @@ _fleet_status_impl() {
   echo "FLAGSHIP: $(hostname -f 2>/dev/null || hostname)"
   echo ""
 
-  local fleet_data
-  fleet_data=$(duckdb "$(msg_db)" -noheader -csv "SELECT ssh_dest, repo, status, pubkey FROM fleet ORDER BY created_at" 2>/dev/null || echo "")
+  local ships_data
+  ships_data=$(duckdb "$(msg_db)" -noheader -csv "SELECT id, repo, ssh_dest, status FROM ships ORDER BY created_at" 2>/dev/null || echo "")
 
-  if [[ -z "$fleet_data" ]]; then
+  if [[ -z "$ships_data" ]]; then
     echo "SHIPS: (none)"
   else
     local ship_count
-    ship_count=$(echo "$fleet_data" | wc -l | tr -d ' ')
-    local registered_keys
-    registered_keys=$(ssh exe.dev ssh-key list 2>/dev/null || echo "")
+    ship_count=$(echo "$ships_data" | wc -l | tr -d ' ')
 
     echo "SHIPS ($ship_count):"
-    printf "  %-35s %-30s %-10s %s\n" "HOSTNAME" "REPO" "STATUS" "KEY"
-    echo "$fleet_data" | while IFS=',' read -r ssh_dest repo status pubkey; do
-      local key_status="none"
-      if [[ -n "$pubkey" ]]; then
-        local key_part
-        key_part=$(echo "$pubkey" | awk '{print $1" "$2}')
-        if echo "$registered_keys" | grep -qF "$key_part"; then
-          key_status="registered"
-        else
-          key_status="unregistered"
-        fi
-      fi
-      printf "  %-35s %-30s %-10s %s\n" "$ssh_dest" "$repo" "$status" "$key_status"
+    printf "  %-25s %-20s %-35s %s\n" "SHIP" "REPO" "SSH_DEST" "STATUS"
+    echo "$ships_data" | while IFS=',' read -r id repo ssh_dest status; do
+      printf "  %-25s %-20s %-35s %s\n" "$id" "$repo" "$ssh_dest" "$status"
     done
   fi
 }

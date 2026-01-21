@@ -53,9 +53,9 @@ main() {
 
   log_info "Fleet created with ship: $ship_name"
 
-  # Get ship hostname
+  # Get ship SSH destination from fleet (SHIP column contains id like "reponame-abc123", SSH_DEST is column 3)
   local ship_dest
-  ship_dest=$("$PROJECT_ROOT/ohcommodore" fleet status 2>&1 | grep "^  ship-$ship_name" | awk '{print $1}')
+  ship_dest=$("$PROJECT_ROOT/ohcommodore" fleet status 2>&1 | grep "^  $ship_name-" | awk '{print $3}')
   [[ -n "$ship_dest" ]] || { log_fail "Could not get ship destination"; return 1; }
 
   local ship_host="${ship_dest%%:*}"
