@@ -18,7 +18,7 @@ Flagship (exe.dev VM, long-running coordinator)
     │
     │ SSH
     ▼
-Ships (exe.dev VMs, one per GitHub repo)
+Ships (exe.dev VMs, multiple per repo with unique IDs)
 ```
 
 **Key design principle**: Minimal external dependencies (bash, ssh, scp, duckdb). All communication happens over SSH.
@@ -48,22 +48,24 @@ GH_TOKEN=... ./ohcommodore init
 ./ohcommodore fleet sink --scuttle    # Destroy ships + flagship
 
 # Ship management (requires GH_TOKEN env var for create)
-GH_TOKEN=... ./ohcommodore ship create owner/repo
-./ohcommodore ship ssh reponame
-./ohcommodore ship destroy reponame
+# Ships get unique IDs like ohcommodore-a1b2c3 (Docker-like model)
+GH_TOKEN=... ./ohcommodore ship create owner/repo  # Creates ohcommodore-a1b2c3
+GH_TOKEN=... ./ohcommodore ship create owner/repo  # Creates ohcommodore-x7y8z9 (new instance)
+./ohcommodore ship ssh ohcommodore-a1              # Prefix matching (must be unique)
+./ohcommodore ship destroy ohcommodore-a1          # Prefix matching
 ```
 
 ### Inbox Commands
 
-Run these commands on a ship (via `ohcommodore ship ssh <ship-name>`):
+Run these commands on a ship (via `ohcommodore ship ssh <ship-id-prefix>`):
 
 ```bash
 # List inbox messages
 ohcommodore inbox list
 ohcommodore inbox list --status done
 
-# Send a command to another ship
-ohcommodore inbox send captain@other-ship "cargo test"
+# Send a command to another ship (use full ship ID)
+ohcommodore inbox send captain@other-repo-d4e5f6 "cargo test"
 
 # Send a command to commodore
 ohcommodore inbox send commodore@flagship-host "echo 'Report from ship'"
@@ -137,7 +139,7 @@ Messages are JSON files with this envelope:
 {
   "message_id": "uuid",
   "created_at": "2026-01-20T19:12:03Z",
-  "source": "captain@ship-01",
+  "source": "captain@ohcommodore-a1b2c3",
   "dest": "commodore@flagship",
   "topic": "cmd.exec",
   "job_id": null,
