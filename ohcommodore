@@ -50,6 +50,14 @@ q_dead() { echo "$(q_root)/dead"; }
 q_done() { echo "$(q_root)/done"; }
 artifacts_root() { echo "$(ns_root)/artifacts"; }
 
+queue_init_dirs() {
+  mkdir -p "$(q_inbound)"
+  mkdir -p "$(q_incoming)"
+  mkdir -p "$(q_dead)"
+  mkdir -p "$(q_done)"
+  mkdir -p "$(artifacts_root)"
+}
+
 need_flagship() {
   [[ -f "$CONFIG_FILE" ]] || die "No flagship configured. Run: ohcommodore init"
 }
