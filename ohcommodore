@@ -963,7 +963,7 @@ EOF
       repo TEXT,
       ssh_dest TEXT NOT NULL,
       status TEXT DEFAULT 'creating',
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (current_timestamp)
     );
   "
 

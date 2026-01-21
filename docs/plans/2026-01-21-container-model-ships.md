@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS ships (
     repo TEXT,                      -- 'owner/ohcommodore' (nullable for no-repo ships)
     ssh_dest TEXT NOT NULL,         -- 'user@vm123.runexe.dev:2200'
     status TEXT DEFAULT 'creating', -- 'creating', 'ready', 'destroying'
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TEXT DEFAULT (current_timestamp)
 );
 ```
 
