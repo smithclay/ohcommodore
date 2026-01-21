@@ -1063,11 +1063,25 @@ _inbox_send() {
   local command="$2"
 
   if ! echo "$recipient" | grep -qE '^(captain|commodore)@.+$'; then
-    die "Invalid recipient format. Use captain@<hostname> or commodore@<hostname>"
+    die "Invalid recipient format. Use captain@<ship-id> or commodore@<hostname>"
   fi
 
-  local remote_host="${recipient#*@}"
-  local dest_ssh="exedev@$remote_host"
+  local role="${recipient%%@*}"
+  local target="${recipient#*@}"
+  local dest_ssh
+
+  if [[ "$role" == "captain" ]]; then
+    # Look up ship ssh_dest from ships table
+    local escaped_target
+    escaped_target=$(sql_escape "$target")
+    local ssh_dest
+    ssh_dest=$(duckdb "$(msg_db)" -noheader -csv "SELECT ssh_dest FROM ships WHERE id = '$escaped_target'" 2>/dev/null || echo "")
+    [[ -n "$ssh_dest" ]] || die "Ship '$target' not found in registry"
+    dest_ssh="$ssh_dest"
+  else
+    # Commodore - target is hostname
+    dest_ssh="exedev@$target"
+  fi
 
   local request_id
   request_id=$(uuid_gen)
