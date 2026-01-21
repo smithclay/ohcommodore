@@ -908,15 +908,14 @@ EOF
   # Create common config and v2 queue state
   init_common "commodore@$flagship_hostname"
 
-  # Create fleet table (commodore-only)
+  # Create ships table (commodore-only)
   duckdb "$(msg_db)" "
-    CREATE TABLE IF NOT EXISTS fleet (
-      name TEXT PRIMARY KEY,
-      repo TEXT NOT NULL,
+    CREATE TABLE IF NOT EXISTS ships (
+      id TEXT PRIMARY KEY,
+      repo TEXT,
       ssh_dest TEXT NOT NULL,
-      pubkey TEXT,
-      status TEXT DEFAULT 'running',
-      created_at TIMESTAMP DEFAULT current_timestamp
+      status TEXT DEFAULT 'creating',
+      created_at TEXT DEFAULT (datetime('now'))
     );
   "
 
