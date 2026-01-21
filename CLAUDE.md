@@ -114,3 +114,60 @@ The inbox enables asynchronous inter-ship communication via DuckDB databases.
 **Message flow:** `unread` → `running` → `done`/`error`
 
 **Recipient format:** `captain@<hostname>` or `commodore@<hostname>`
+
+## v2 Queue System
+
+The v2 messaging system replaces remote DuckDB writes with file-based NDJSON queue transport.
+
+### Directory Layout (per namespace)
+
+```
+~/.ohcommodore/ns/<namespace>/
+├── q/
+│   ├── inbound/           # Incoming messages (visible)
+│   │   └── .incoming/     # Staging area for SCP
+│   ├── outbound/          # Outgoing messages
+│   ├── dead/              # Failed messages + .reason files
+│   └── done/              # Processed messages (optional)
+├── artifacts/             # Command output files
+│   └── <request_id>/
+│       ├── stdout.txt
+│       └── stderr.txt
+└── data.duckdb            # Messages table
+```
+
+### Message Format
+
+Messages are JSON files with this envelope:
+
+```json
+{
+  "message_id": "uuid",
+  "created_at": "2026-01-20T19:12:03Z",
+  "source": "captain@ship-01",
+  "dest": "commodore@flagship",
+  "topic": "cmd.exec",
+  "job_id": null,
+  "lease_token": null,
+  "payload": {}
+}
+```
+
+### Protocol Topics
+
+| Topic | Direction | Purpose |
+|-------|-----------|---------|
+| `cmd.exec` | → ship | Execute a command |
+| `cmd.result` | ← ship | Return execution result |
+
+### Environment Variables (v2)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OHCOM_NS` | `default` | Active namespace |
+
+### Commands (v2)
+
+```bash
+ohcommodore queue status     # Show queue counts and DB stats
+```
