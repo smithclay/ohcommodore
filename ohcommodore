@@ -35,6 +35,12 @@ sql_escape() {
   printf '%s' "$1" | sed "s/'/''/g"
 }
 
+sql_like_escape() {
+  local escaped
+  escaped=$(sql_escape "$1")
+  printf '%s' "$escaped" | sed -e 's/\\/\\\\/g' -e 's/%/\\%/g' -e 's/_/\\_/g'
+}
+
 uuid_gen() {
   uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid
 }
@@ -49,10 +55,10 @@ generate_ship_id() {
 resolve_ship_prefix() {
   local prefix="$1"
   local escaped_prefix
-  escaped_prefix=$(sql_escape "$prefix")
+  escaped_prefix=$(sql_like_escape "$prefix")
 
   local matches
-  matches=$(duckdb "$(msg_db)" -csv -noheader "SELECT id FROM ships WHERE id LIKE '${escaped_prefix}%'" 2>/dev/null || echo "")
+  matches=$(duckdb "$(msg_db)" -csv -noheader "SELECT id FROM ships WHERE id LIKE '${escaped_prefix}%' ESCAPE '\\'" 2>/dev/null || echo "")
 
   local count
   if [[ -z "$matches" ]]; then
@@ -846,11 +852,11 @@ cmd_ship_ssh() {
   [[ -n "$prefix" ]] || die "Usage: ohcommodore ship ssh <prefix>"
 
   local escaped_prefix
-  escaped_prefix=$(sql_escape "$prefix")
+  escaped_prefix=$(sql_like_escape "$prefix")
 
   # Get matching ships
   local matches
-  matches=$(flagship_ssh "duckdb ~/.ohcommodore/ns/${OHCOM_NS:-default}/data.duckdb -noheader -csv \"SELECT id, ssh_dest FROM ships WHERE id LIKE '${escaped_prefix}%'\"" 2>/dev/null)
+  matches=$(flagship_ssh "duckdb ~/.ohcommodore/ns/${OHCOM_NS:-default}/data.duckdb -noheader -csv \"SELECT id, ssh_dest FROM ships WHERE id LIKE '${escaped_prefix}%' ESCAPE '\\'\"" 2>/dev/null)
 
   local count
   if [[ -z "$matches" ]]; then

@@ -40,4 +40,21 @@ else
 fi
 
 echo ""
+# Remove SSH keys created by ohcommodore (comment contains "ohcommodore")
+echo -e "${YELLOW}Checking for ohcommodore SSH keys on exe.dev...${NC}"
+ohcom_keys=$(ssh exe.dev ssh-key list --json 2>/dev/null | jq -r '.ssh_keys[] | select(.comment != null and (.comment | contains("ohcommodore")) and .current == false) | .public_key' || true)
+if [[ -n "$ohcom_keys" ]]; then
+  key_count=$(echo "$ohcom_keys" | wc -l | tr -d ' ')
+  echo "Found $key_count ohcommodore SSH keys to remove"
+  while IFS= read -r key; do
+    [[ -n "$key" ]] || continue
+    echo "Removing key: ${key:0:50}..."
+    ssh exe.dev ssh-key remove "$key" 2>/dev/null || true
+  done <<< "$ohcom_keys"
+  echo -e "${GREEN}Removed ohcommodore SSH keys${NC}"
+else
+  echo "No ohcommodore SSH keys found"
+fi
+
+echo ""
 echo -e "${GREEN}Cleanup complete!${NC}"
