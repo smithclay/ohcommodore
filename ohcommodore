@@ -672,6 +672,10 @@ _ship_create_impl() {
     log "Creating empty ship '$name' (no repo)"
   fi
 
+  # Generate unique ship ID
+  local ship_id
+  ship_id=$(generate_ship_id "$name")
+
   log "Generating SSH key for ship..."
   local tmpdir
   tmpdir=$(mktemp -d)
@@ -691,7 +695,7 @@ _ship_create_impl() {
   log "Creating ship VM..."
   local create_json
   create_json=$(ssh exe.dev new --json \
-    --name="ship-${name}" \
+    --name="ship-${ship_id}" \
     --no-email \
     --env GH_TOKEN="$GH_TOKEN" \
     --env TARGET_REPO="$repo" \
@@ -707,6 +711,18 @@ _ship_create_impl() {
   [[ -n "$ssh_dest" && "$ssh_dest" != "null" ]] || die "Failed to get ssh_dest from: $create_json"
 
   log "Ship VM created: $ssh_dest"
+
+  # Register ship with status='creating' before initialization
+  log "Registering ship in ships table..."
+  local escaped_id escaped_repo escaped_dest
+  escaped_id=$(sql_escape "$ship_id")
+  escaped_repo=$(sql_escape "$repo")
+  escaped_dest=$(sql_escape "$ssh_dest")
+
+  duckdb "$(msg_db)" "
+    INSERT INTO ships (id, repo, ssh_dest, status)
+    VALUES ('$escaped_id', '$escaped_repo', '$escaped_dest', 'creating');
+  "
 
   log "Waiting for DNS..."
   local hostname="${ssh_dest%%:*}"
@@ -735,19 +751,13 @@ _ship_create_impl() {
   ssh "$ssh_dest" \
     "GH_TOKEN=$(printf %q "$GH_TOKEN") $init_env $dotfiles_env SHIP_SSH_PRIVKEY_B64=$(printf %q "$ship_privkey_b64") SHIP_SSH_PUBKEY_B64=$(printf %q "$ship_pubkey_b64") ~/.local/bin/ohcommodore _init_captain $(printf %q "$repo")"
 
-  log "Registering ship in fleet..."
-  local escaped_name escaped_repo escaped_dest escaped_pubkey
-  escaped_name=$(sql_escape "$name")
-  escaped_repo=$(sql_escape "$repo")
-  escaped_dest=$(sql_escape "$ssh_dest")
-  escaped_pubkey=$(sql_escape "$ship_pubkey")
-
+  # Update ship status to ready after successful init
+  log "Updating ship status to ready..."
   duckdb "$(msg_db)" "
-    INSERT OR REPLACE INTO fleet (name, repo, ssh_dest, pubkey, status, created_at)
-    VALUES ('$escaped_name', '$escaped_repo', '$escaped_dest', '$escaped_pubkey', 'running', current_timestamp);
+    UPDATE ships SET status = 'ready' WHERE id = '$escaped_id';
   "
 
-  log "Ship ready: $ssh_dest"
+  log "Created ship: $ship_id"
 }
 
 cmd_ship_destroy() {
