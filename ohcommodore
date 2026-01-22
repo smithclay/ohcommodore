@@ -749,9 +749,14 @@ _fleet_sink_impl() {
 
 init_common() {
   local identity="$1"
-  local db
+  local db maildir
   db="$(msg_db)"
+  maildir=$(maildir_for_identity "$identity")
 
+  # Create Maildir structure
+  ensure_maildir "$maildir"
+
+  # Initialize config database
   init_messages_db
 
   local escaped_identity
