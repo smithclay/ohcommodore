@@ -46,6 +46,47 @@ ensure_maildir() {
   mkdir -p "$maildir"/{new,cur,tmp}
 }
 
+# Remote Maildir helpers (for ships accessing flagship's Maildir)
+# Returns 0 if current role requires remote Maildir access
+maildir_is_remote() {
+  local role
+  role=$(get_role)
+  [[ "$role" == "captain" ]]
+}
+
+# List new message files in Maildir
+# Returns list of paths (relative to home on flagship for remote)
+maildir_list_new() {
+  local maildir="$1"
+  if maildir_is_remote; then
+    flagship_ssh "ls '$maildir/new/'* 2>/dev/null || true"
+  else
+    ls "$maildir/new/"* 2>/dev/null || true
+  fi
+}
+
+# Claim a message (move from new/ to cur/)
+# For remote: also copies message locally for processing
+# Returns path to local claimed message
+maildir_claim() {
+  local msg_path="$1" maildir="$2"
+  local filename
+  filename=$(basename "$msg_path")
+  local claimed_name="${filename}:2,S"
+
+  if maildir_is_remote; then
+    # Claim on flagship (move to cur/)
+    flagship_ssh "mv '$msg_path' '$maildir/cur/$claimed_name'"
+    # Copy to local Maildir for processing
+    ensure_maildir "$maildir"
+    flagship_ssh "cat '$maildir/cur/$claimed_name'" > "$maildir/cur/$claimed_name"
+    echo "$maildir/cur/$claimed_name"
+  else
+    mv "$msg_path" "$maildir/cur/$claimed_name"
+    echo "$maildir/cur/$claimed_name"
+  fi
+}
+
 # Email composition and sending
 send_email() {
   local from="$1" to="$2" subject="$3" body="$4"
@@ -866,30 +907,55 @@ _inbox_list() {
   printf "%-8s %-40s %-25s %-15s %s\n" "STATUS" "ID" "FROM" "TOPIC" "DATE"
   echo "-------- ---------------------------------------- ------------------------- --------------- --------------------"
 
-  local dir status
-  for dir in "$maildir/new" "$maildir/cur"; do
-    [[ -d "$dir" ]] || continue
+  if maildir_is_remote; then
+    # Remote Maildir listing - parse on flagship side
+    flagship_ssh "
+      for dir in '$maildir/new' '$maildir/cur'; do
+        [[ -d \"\$dir\" ]] || continue
+        if [[ \"\$dir\" == */new ]]; then
+          status='unread'
+          [[ '$status_filter' == 'done' || '$status_filter' == 'handled' ]] && continue
+        else
+          status='done'
+          [[ '$status_filter' == 'unread' || '$status_filter' == 'pending' ]] && continue
+        fi
+        for msg in \"\$dir\"/*; do
+          [[ -f \"\$msg\" ]] || continue
+          msg_id=\$(grep -i '^Message-ID:' \"\$msg\" | head -1 | sed 's/^[^:]*: *//' | tr -d '<>' | cut -c1-38)
+          from=\$(grep -i '^From:' \"\$msg\" | head -1 | sed 's/^[^:]*: *//' | cut -c1-25)
+          topic=\$(grep -i '^X-Ohcom-Topic:' \"\$msg\" | head -1 | sed 's/^[^:]*: *//')
+          date_hdr=\$(grep -i '^Date:' \"\$msg\" | head -1 | sed 's/^[^:]*: *//' | cut -c1-20)
+          printf '%-8s %-40s %-25s %-15s %s\n' \"\$status\" \"\$msg_id\" \"\$from\" \"\$topic\" \"\$date_hdr\"
+        done
+      done
+    "
+  else
+    # Local Maildir listing
+    local dir status
+    for dir in "$maildir/new" "$maildir/cur"; do
+      [[ -d "$dir" ]] || continue
 
-    if [[ "$dir" == */new ]]; then
-      status="unread"
-      [[ "$status_filter" == "done" || "$status_filter" == "handled" ]] && continue
-    else
-      status="done"
-      [[ "$status_filter" == "unread" || "$status_filter" == "pending" ]] && continue
-    fi
+      if [[ "$dir" == */new ]]; then
+        status="unread"
+        [[ "$status_filter" == "done" || "$status_filter" == "handled" ]] && continue
+      else
+        status="done"
+        [[ "$status_filter" == "unread" || "$status_filter" == "pending" ]] && continue
+      fi
 
-    for msg in "$dir"/*; do
-      [[ -f "$msg" ]] || continue
+      for msg in "$dir"/*; do
+        [[ -f "$msg" ]] || continue
 
-      local msg_id from topic date_hdr
-      msg_id=$(email_get_header "$msg" "Message-ID" | tr -d '<>' | cut -c1-38)
-      from=$(email_get_header "$msg" "From" | cut -c1-25)
-      topic=$(email_get_header "$msg" "X-Ohcom-Topic")
-      date_hdr=$(email_get_header "$msg" "Date" | cut -c1-20)
+        local msg_id from topic date_hdr
+        msg_id=$(email_get_header "$msg" "Message-ID" | tr -d '<>' | cut -c1-38)
+        from=$(email_get_header "$msg" "From" | cut -c1-25)
+        topic=$(email_get_header "$msg" "X-Ohcom-Topic")
+        date_hdr=$(email_get_header "$msg" "Date" | cut -c1-20)
 
-      printf "%-8s %-40s %-25s %-15s %s\n" "$status" "$msg_id" "$from" "$topic" "$date_hdr"
+        printf "%-8s %-40s %-25s %-15s %s\n" "$status" "$msg_id" "$from" "$topic" "$date_hdr"
+      done
     done
-  done
+  fi
 }
 
 _inbox_send() {
@@ -927,33 +993,65 @@ _inbox_read() {
   [[ -n "$my_identity" ]] || die "Cannot determine identity"
   maildir=$(maildir_for_identity "$my_identity")
 
-  # Find message by ID prefix in new/ or cur/
-  local found=""
-  for dir in "$maildir/new" "$maildir/cur"; do
-    [[ -d "$dir" ]] || continue
-    for msg in "$dir"/*; do
-      [[ -f "$msg" ]] || continue
-      local msg_id
-      msg_id=$(email_get_header "$msg" "Message-ID")
-      if [[ "$msg_id" == *"$msg_prefix"* ]]; then
-        found="$msg"
-        break 2
+  if maildir_is_remote; then
+    # Remote: find and read on flagship
+    local found
+    found=$(flagship_ssh "
+      found=''
+      for dir in '$maildir/new' '$maildir/cur'; do
+        [[ -d \"\$dir\" ]] || continue
+        for msg in \"\$dir\"/*; do
+          [[ -f \"\$msg\" ]] || continue
+          msg_id=\$(grep -i '^Message-ID:' \"\$msg\" | head -1 | sed 's/^[^:]*: *//')
+          if [[ \"\$msg_id\" == *'$msg_prefix'* ]]; then
+            found=\"\$msg\"
+            break 2
+          fi
+        done
+      done
+      [[ -n \"\$found\" ]] || { echo 'ERROR:NOT_FOUND'; exit 1; }
+      # If in new/, move to cur/
+      if [[ \"\$found\" == */new/* ]]; then
+        filename=\$(basename \"\$found\")
+        mv \"\$found\" '$maildir/cur/'\"\${filename}:2,S\"
+        found='$maildir/cur/'\"\${filename}:2,S\"
       fi
+      cat \"\$found\"
+    " 2>&1) || true
+
+    if [[ "$found" == "ERROR:NOT_FOUND" ]]; then
+      die "No message found matching '$msg_prefix'"
+    fi
+    echo "$found"
+  else
+    # Local: find and read
+    local found=""
+    for dir in "$maildir/new" "$maildir/cur"; do
+      [[ -d "$dir" ]] || continue
+      for msg in "$dir"/*; do
+        [[ -f "$msg" ]] || continue
+        local msg_id
+        msg_id=$(email_get_header "$msg" "Message-ID")
+        if [[ "$msg_id" == *"$msg_prefix"* ]]; then
+          found="$msg"
+          break 2
+        fi
+      done
     done
-  done
 
-  [[ -n "$found" ]] || die "No message found matching '$msg_prefix'"
+    [[ -n "$found" ]] || die "No message found matching '$msg_prefix'"
 
-  # If in new/, move to cur/ (mark as read)
-  if [[ "$found" == */new/* ]]; then
-    local filename
-    filename=$(basename "$found")
-    mv "$found" "$maildir/cur/${filename}:2,S"
-    found="$maildir/cur/${filename}:2,S"
+    # If in new/, move to cur/ (mark as read)
+    if [[ "$found" == */new/* ]]; then
+      local filename
+      filename=$(basename "$found")
+      mv "$found" "$maildir/cur/${filename}:2,S"
+      found="$maildir/cur/${filename}:2,S"
+    fi
+
+    # Output message content
+    cat "$found"
   fi
-
-  # Output message content
-  cat "$found"
 }
 
 _inbox_identity() {
@@ -974,44 +1072,48 @@ _inbox_identity() {
 cmd__scheduler() {
   require_role commodore captain
 
-  local my_identity maildir poll_interval
+  local my_identity maildir poll_interval is_remote
   my_identity=$(_inbox_identity)
   [[ -n "$my_identity" ]] || die "No identity configured"
   maildir=$(maildir_for_identity "$my_identity")
   ensure_maildir "$maildir"
 
+  is_remote="no"
+  maildir_is_remote && is_remote="yes"
+
   poll_interval=$(duckdb "$(msg_db)" -noheader -csv "SELECT value FROM config WHERE key = 'POLL_INTERVAL_SEC'" 2>/dev/null || echo "10")
 
   trap 'log "Scheduler shutting down"; exit 0' SIGTERM SIGINT
 
-  log "Email scheduler starting for $my_identity (poll: ${poll_interval}s, maildir: $maildir)"
+  log "Email scheduler starting for $my_identity (poll: ${poll_interval}s, maildir: $maildir, remote: $is_remote)"
 
   while true; do
-    # Process new mail
-    for msg in "$maildir/new/"*; do
-      [[ -f "$msg" ]] || continue
+    # Process new mail (uses remote helpers if captain)
+    local new_files
+    new_files=$(maildir_list_new "$maildir")
 
-      local filename topic
-      filename=$(basename "$msg")
+    while IFS= read -r msg; do
+      [[ -n "$msg" && "$msg" != *"No such file"* ]] || continue
 
-      # Claim by moving to cur/ (Maildir protocol)
-      mv "$msg" "$maildir/cur/${filename}:2,S"
-      msg="$maildir/cur/${filename}:2,S"
+      local topic claimed_msg
+      # Claim message (moves to cur/, copies locally if remote)
+      claimed_msg=$(maildir_claim "$msg" "$maildir")
+      [[ -f "$claimed_msg" ]] || continue
 
-      topic=$(email_get_header "$msg" "X-Ohcom-Topic")
+      topic=$(email_get_header "$claimed_msg" "X-Ohcom-Topic")
 
       case "$topic" in
         cmd.exec)
-          _scheduler_handle_cmd_exec "$msg"
+          _scheduler_handle_cmd_exec "$claimed_msg"
           ;;
         cmd.result)
-          _scheduler_handle_cmd_result "$msg"
+          _scheduler_handle_cmd_result "$claimed_msg"
           ;;
         *)
           log "Unknown topic '$topic' in message, skipping"
           ;;
       esac
-    done
+    done <<< "$new_files"
 
     sleep "$poll_interval"
   done

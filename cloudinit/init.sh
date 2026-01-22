@@ -237,16 +237,33 @@ fi
 # ──────────────────────────────────────────────────────────
 
 if [[ "${ROLE:-}" == "captain" && -n "${FLAGSHIP_SSH_DEST:-}" ]]; then
-  log "Installing autossh for SMTP tunnel..."
-  if ! need_cmd autossh; then
+  log "Installing autossh and msmtp for SMTP tunnel..."
+  if ! need_cmd autossh || ! need_cmd msmtp; then
     sudo apt-get update -qq
-    sudo apt-get install -y autossh
+    sudo apt-get install -y autossh msmtp msmtp-mta
   fi
 
   log "Adding flagship to /etc/hosts..."
   if ! grep -q '^127\.0\.0\.1.*flagship' /etc/hosts; then
     echo "127.0.0.1 flagship" | sudo tee -a /etc/hosts > /dev/null
   fi
+
+  log "Configuring msmtp for local SMTP relay..."
+  cat > ~/.msmtprc << 'MSMTP_CONF'
+# msmtp config for ohcommodore ships
+# Sends mail via local SMTP tunnel (autossh -> flagship:25)
+defaults
+auth off
+tls off
+
+account flagship
+host 127.0.0.1
+port 25
+from exedev@localhost
+
+account default : flagship
+MSMTP_CONF
+  chmod 600 ~/.msmtprc
 
   log "Creating Maildir for ship identity..."
   mkdir -p ~/Maildir/"${SHIP_ID:-captain}"/{new,cur,tmp}

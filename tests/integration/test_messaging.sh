@@ -125,19 +125,23 @@ main() {
   assert_contains "Message sent" "$send_output" "Message sent:"
 
   # ============================================
-  # Test 4: Verify message arrived in ship's Maildir
+  # Test 4: Verify message arrived on flagship's Maildir (for ship)
   # ============================================
-  log_test "Verifying message in ship's Maildir..."
+  log_test "Verifying message on flagship's Maildir..."
 
   # Wait a moment for email delivery
   sleep 3
 
+  # Extract ship ID from identity (captain@ship-id -> ship-id)
+  local ship_id="${ship_identity#captain@}"
+
+  # Check flagship's Maildir for ship's mail (all mail stored on flagship)
   local inbound_files
-  inbound_files=$(test_ssh "$ship_a_dest" \
-    'ls ~/Maildir/*/new/* 2>/dev/null | wc -l' 2>&1 | tr -d '[:space:]')
+  inbound_files=$(test_ssh "$flagship_dest" \
+    "ls ~/Maildir/$ship_id/new/* 2>/dev/null | wc -l" 2>&1 | tr -d '[:space:]')
   [[ "$inbound_files" =~ ^[0-9]+$ ]] || inbound_files=0
 
-  assert "Message file exists in Maildir/new" "[[ '$inbound_files' -ge 1 ]]"
+  assert "Message file exists on flagship's Maildir" "[[ '$inbound_files' -ge 1 ]]"
 
   # ============================================
   # Test 5: Start scheduler briefly to process message
@@ -243,13 +247,17 @@ main() {
   ship2ship_request_id=$(echo "$ship2ship_send_output" | awk '{print $3}')
   [[ -n "$ship2ship_request_id" ]] || { log_fail "Could not parse ship-to-ship request id"; return 1; }
 
-  log_test "Verifying ship-to-ship message arrived..."
+  log_test "Verifying ship-to-ship message arrived on flagship..."
 
   sleep 3
+  # Extract ship B ID from identity (captain@ship-id -> ship-id)
+  local ship_b_id="${ship_b_identity#captain@}"
+
+  # Check flagship's Maildir for ship B's mail (all mail stored on flagship)
   local ship2ship_inbound
-  ship2ship_inbound=$(test_ssh_quiet "$ship_b_dest" \
-    "grep -rl '$ship2ship_request_id' ~/Maildir/*/new/ ~/Maildir/*/cur/ 2>/dev/null | head -1" 2>/dev/null | tr -d '\n')
-  assert "Ship-to-ship inbound received" "[[ -n '$ship2ship_inbound' ]]"
+  ship2ship_inbound=$(test_ssh "$flagship_dest" \
+    "grep -rl '$ship2ship_request_id' ~/Maildir/$ship_b_id/new/ ~/Maildir/$ship_b_id/cur/ 2>/dev/null | head -1" 2>&1 | tr -d '\n')
+  assert "Ship-to-ship inbound received on flagship" "[[ -n '$ship2ship_inbound' ]]"
 
   log_test "Processing ship-to-ship message on ship B..."
 
@@ -261,13 +269,13 @@ main() {
     kill $SCHED_PID 2>/dev/null || true
   ' 2>&1 || true
 
-  log_test "Verifying ship-to-ship result delivered to ship A..."
+  log_test "Verifying ship-to-ship result delivered to ship A (on flagship)..."
 
-  # Check if result message with our request_id arrived in ship A's Maildir
+  # Check if result message with our request_id arrived on flagship's Maildir for ship A
   local ship2ship_result
-  ship2ship_result=$(test_ssh_quiet "$ship_a_dest" \
-    "grep -rl '$ship2ship_request_id' ~/Maildir/*/new/ ~/Maildir/*/cur/ 2>/dev/null | head -1" 2>/dev/null | tr -d '\n')
-  assert "Ship-to-ship cmd.result delivered" "[[ -n '$ship2ship_result' ]]"
+  ship2ship_result=$(test_ssh "$flagship_dest" \
+    "grep -rl '$ship2ship_request_id' ~/Maildir/$ship_id/new/ ~/Maildir/$ship_id/cur/ 2>/dev/null | head -1" 2>&1 | tr -d '\n')
+  assert "Ship-to-ship cmd.result delivered to flagship" "[[ -n '$ship2ship_result' ]]"
 
   log_test "Checking ship-to-ship artifacts on ship B..."
 
