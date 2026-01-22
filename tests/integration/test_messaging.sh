@@ -81,25 +81,24 @@ main() {
   log_info "Flagship host: $flagship_host"
 
   # ============================================
-  # Test 1: Queue status on flagship
+  # Test 1: Inbox identity on flagship
   # ============================================
-  log_test "Checking queue status on flagship..."
+  log_test "Checking inbox identity on flagship..."
 
-  local queue_status
-  queue_status=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$flagship_dest" '~/.local/bin/ohcommodore queue status' 2>&1)
+  local flagship_identity
+  flagship_identity=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$flagship_dest" '~/.local/bin/ohcommodore inbox identity' 2>&1)
 
-  assert_contains "Queue status shows namespace" "$queue_status" "namespace:"
-  assert_contains "Queue status shows inbound" "$queue_status" "inbound:"
-  assert_contains "Queue status shows database" "$queue_status" "messages:"
+  assert_contains "Flagship has commodore identity" "$flagship_identity" "commodore@"
 
   # ============================================
-  # Test 2: Queue status on ship
+  # Test 2: Inbox identity on ship
   # ============================================
-  log_test "Checking queue status on ship..."
+  log_test "Checking inbox identity on ship..."
 
-  queue_status=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ship_a_dest" '~/.local/bin/ohcommodore queue status' 2>&1)
+  local ship_identity_check
+  ship_identity_check=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ship_a_dest" '~/.local/bin/ohcommodore inbox identity' 2>&1)
 
-  assert_contains "Ship queue status works" "$queue_status" "namespace:"
+  assert_contains "Ship has captain identity" "$ship_identity_check" "captain@"
 
   # ============================================
   # Test 3: Send message from flagship to ship

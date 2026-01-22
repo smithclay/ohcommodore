@@ -161,8 +161,3 @@ Messages are JSON files with this envelope:
 |----------|---------|-------------|
 | `OHCOM_NS` | `default` | Active namespace |
 
-### Commands (v2)
-
-```bash
-ohcommodore queue status     # Show queue counts and DB stats
-```

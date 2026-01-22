@@ -179,51 +179,24 @@ write_msg_file() {
 }
 
 deliver_msg_file() {
-  local local_path="$1"
-  local dest_ssh="$2"
-  local max_retries="${3:-3}"
-
-  local filename
+  local local_path="$1" dest_ssh="$2" retries="${3:-3}"
+  local filename remote_incoming remote_inbound
   filename=$(basename "$local_path")
-
-  local remote_incoming remote_inbound
-  # Use ~ for scp (expands on remote side), $HOME for ssh commands
   remote_incoming="~/.ohcommodore/ns/$(ns)/q/inbound/.incoming"
   remote_inbound="~/.ohcommodore/ns/$(ns)/q/inbound"
 
-  local attempt=1
-  local delay=1
-
-  local ssh_opts="-o BatchMode=yes -o StrictHostKeyChecking=accept-new"
-
-  local last_err=""
-  while [[ $attempt -le $max_retries ]]; do
-    # Ensure remote directories exist
-    # shellcheck disable=SC2086  # ssh_opts needs word splitting
-    if last_err=$(ssh $ssh_opts "$dest_ssh" "mkdir -p $remote_incoming $remote_inbound" 2>&1); then
-      # SCP to .incoming (staging)
-      if last_err=$(scp -q -o StrictHostKeyChecking=accept-new "$local_path" "${dest_ssh}:${remote_incoming}/${filename}" 2>&1); then
-        # Atomic rename to publish
-        # shellcheck disable=SC2086  # ssh_opts needs word splitting
-        if last_err=$(ssh $ssh_opts "$dest_ssh" "mv ${remote_incoming}/${filename} ${remote_inbound}/${filename}" 2>&1); then
-          rm -f "$local_path"
-          return 0
-        else
-          log "Delivery attempt $attempt/$max_retries: mv failed: $last_err"
-        fi
-      else
-        log "Delivery attempt $attempt/$max_retries: scp failed: $last_err"
-      fi
-    else
-      log "Delivery attempt $attempt/$max_retries: ssh mkdir failed: $last_err"
+  for ((i = 1; i <= retries; i++)); do
+    # SCP to staging, then atomic rename (mkdir -p is idempotent)
+    if scp -q -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+         "$local_path" "${dest_ssh}:${remote_incoming}/${filename}" 2>/dev/null &&
+       ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$dest_ssh" \
+         "mkdir -p $remote_incoming $remote_inbound && mv ${remote_incoming}/${filename} ${remote_inbound}/" 2>/dev/null; then
+      rm -f "$local_path"
+      return 0
     fi
-
-    sleep "$delay"
-    delay=$((delay * 2))
-    attempt=$((attempt + 1))
+    sleep "$i"
   done
-
-  log "ERROR: Failed to deliver message after $max_retries attempts. Last error: $last_err"
+  log "ERROR: Failed to deliver message after $retries attempts"
   return 1
 }
 
@@ -277,32 +250,16 @@ daemon_shutdown_handler() {
 }
 
 daemon_recover_claimed() {
-  local inbound claimed_file filename age_seconds threshold_seconds
+  local inbound f
   inbound="$(q_inbound)"
-  threshold_seconds=300  # 5 minutes
-
-  for claimed_file in "$inbound"/.claimed.*.json; do
-    [[ -f "$claimed_file" ]] || continue
-
-    filename=$(basename "$claimed_file")
-    filename="${filename#.claimed.}"  # Remove .claimed. prefix
-
-    # Get file age in seconds
-    if [[ "$(uname)" == "Darwin" ]]; then
-      age_seconds=$(( $(date +%s) - $(stat -f %m "$claimed_file") ))
+  # Deadletter old claims (>5 min), retry recent ones
+  for f in "$inbound"/.claimed.*.json; do
+    [[ -f "$f" ]] || continue
+    local name="${f##*/.claimed.}"
+    if find "$f" -mmin +5 -print -quit | grep -q .; then
+      mv "$f" "$(q_dead)/$name"
     else
-      age_seconds=$(( $(date +%s) - $(stat -c %Y "$claimed_file") ))
-    fi
-
-    if [[ $age_seconds -gt $threshold_seconds ]]; then
-      # Too old - deadletter
-      mv "$claimed_file" "$(q_dead)/$filename"
-      echo "Abandoned claim (age: ${age_seconds}s, exceeded ${threshold_seconds}s threshold)" > "$(q_dead)/${filename%.json}.reason"
-      log "Deadlettered abandoned claim: $filename"
-    else
-      # Recent - retry
-      mv "$claimed_file" "$inbound/$filename"
-      log "Recovered claimed file for retry: $filename"
+      mv "$f" "$inbound/$name"
     fi
   done
 }
@@ -1314,33 +1271,6 @@ cmd__scheduler() {
   log "Scheduler shutting down gracefully"
 }
 
-cmd_queue_status() {
-  require_role commodore captain
-
-  queue_init_dirs  # Ensure dirs exist
-
-  local inbound_count claimed_count dead_count msg_count
-
-  inbound_count=$(find "$(q_inbound)" -maxdepth 1 -name 'msg.*.json' 2>/dev/null | wc -l | tr -d ' ')
-  claimed_count=$(find "$(q_inbound)" -maxdepth 1 -name '.claimed.*.json' 2>/dev/null | wc -l | tr -d ' ')
-  dead_count=$(find "$(q_dead)" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
-
-  if [[ -f "$(msg_db)" ]]; then
-    msg_count=$(duckdb "$(msg_db)" -noheader -csv "SELECT COUNT(*) FROM messages" 2>/dev/null || echo "0")
-  else
-    msg_count="0"
-  fi
-
-  echo "Queue Status (namespace: $(ns))"
-  echo "================================"
-  echo "  inbound: $inbound_count"
-  echo "  claimed: $claimed_count"
-  echo "  dead:    $dead_count"
-  echo ""
-  echo "Database:"
-  echo "  messages: $msg_count"
-}
-
 show_help() {
   cat <<'HELP'
 ohcommodore - lightweight multi-agent control plane
@@ -1356,7 +1286,6 @@ USAGE:
   ohcommodore inbox send <rcpt> <cmd>      Send command to recipient
   ohcommodore inbox read <id>              Read and mark handled
   ohcommodore inbox identity               Show this node's identity
-  ohcommodore queue status               Show v2 queue status
 
 HELP
 }
@@ -1378,11 +1307,6 @@ case "${1:-help}" in
       *) die "Usage: ohcommodore ship [create|destroy|ssh] <arg>" ;;
     esac ;;
   inbox) shift; cmd_inbox "$@" ;;
-  queue)
-    case "${2:-}" in
-      status) cmd_queue_status ;;
-      *) die "Usage: ohcommodore queue [status]" ;;
-    esac ;;
   _init_commodore) cmd__init_commodore ;;
   _init_captain) cmd__init_captain "${2:-}" ;;
   _scheduler) cmd__scheduler ;;
