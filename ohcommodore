@@ -1339,45 +1339,21 @@ _inbox_send() {
     die "Invalid recipient format. Use captain@<ship-id> or commodore@<hostname>"
   fi
 
-  local role="${recipient%%@*}"
-  local target="${recipient#*@}"
-  local dest_ssh
-
-  if [[ "$role" == "captain" ]]; then
-    # Look up ship ssh_dest from central registry
-    dest_ssh=$(lookup_ship_ssh_dest "$target" || true)
-    [[ -n "$dest_ssh" ]] || die "Ship '$target' not found in registry"
-  else
-    # Commodore - target is hostname
-    dest_ssh="exedev@$target"
-  fi
-
-  local request_id
+  local my_identity request_id
+  my_identity=$(_inbox_identity)
+  [[ -n "$my_identity" ]] || die "Cannot determine identity"
   request_id=$(uuid_gen)
 
-  # Build cmd.exec payload
-  local payload_json
-  payload_json=$(jq -n \
-    --arg request_id "$request_id" \
-    --arg cmd "$command" \
-    '{
-      request_id: $request_id,
-      cmd: $cmd,
-      cwd: "~",
-      env: {},
-      timeout_s: 1800
-    }')
+  local msg_id
+  msg_id=$(send_email \
+    "$my_identity" \
+    "$recipient" \
+    "cmd.exec" \
+    "$command" \
+    "X-Ohcom-Topic: cmd.exec" \
+    "X-Ohcom-Request-ID: $request_id")
 
-  # Write message file
-  local msg_path
-  msg_path=$(write_msg_file "cmd.exec" "$recipient" "$payload_json")
-
-  # Deliver via SCP
-  if deliver_msg_file "$msg_path" "$dest_ssh"; then
-    echo "Message sent: $request_id -> $recipient"
-  else
-    die "Failed to send message to $recipient"
-  fi
+  echo "Message sent: $request_id -> $recipient"
 }
 
 _inbox_read() {
