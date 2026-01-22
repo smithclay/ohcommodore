@@ -108,6 +108,10 @@ q_incoming() { echo "$(q_inbound)/.incoming"; }
 q_dead() { echo "$(q_root)/dead"; }
 q_outbound() { echo "$(q_root)/outbound"; }
 artifacts_root() { echo "$(ns_root)/artifacts"; }
+nq_dir() { echo "$(ns_root)/nq"; }
+
+# Default command timeout: 5 minutes
+CMD_TIMEOUT_S="${CMD_TIMEOUT_S:-300}"
 
 queue_init_dirs() {
   mkdir -p "$(q_inbound)"
@@ -115,6 +119,7 @@ queue_init_dirs() {
   mkdir -p "$(q_dead)"
   mkdir -p "$(q_outbound)"
   mkdir -p "$(artifacts_root)"
+  mkdir -p "$(nq_dir)"
 }
 
 init_messages_db() {
@@ -128,11 +133,10 @@ init_messages_db() {
       source TEXT NOT NULL,
       dest TEXT NOT NULL,
       topic TEXT NOT NULL,
-      job_id TEXT,
-      lease_token TEXT,
       payload_json TEXT NOT NULL,
       ingested_at TIMESTAMP DEFAULT current_timestamp,
-      handled_at TIMESTAMP
+      handled_at TIMESTAMP,
+      submitted INTEGER
     );
   "
 }
@@ -141,8 +145,6 @@ write_msg_file() {
   local topic="$1"
   local dest="$2"
   local payload_json="$3"
-  local job_id="${4:-}"
-  local lease_token="${5:-}"
 
   local msg_id ts source tmpfile finalfile
   msg_id=$(uuid_gen)
@@ -162,8 +164,6 @@ write_msg_file() {
     --arg source "$source" \
     --arg dest "$dest" \
     --arg topic "$topic" \
-    --arg job_id "$job_id" \
-    --arg lease_token "$lease_token" \
     --argjson payload "$payload_json" \
     '{
       message_id: $msg_id,
@@ -171,8 +171,6 @@ write_msg_file() {
       source: $source,
       dest: $dest,
       topic: $topic,
-      job_id: (if $job_id == "" then null else $job_id end),
-      lease_token: (if $lease_token == "" then null else $lease_token end),
       payload: $payload
     }' > "$tmpfile"
 
@@ -235,34 +233,27 @@ ingest_queue_file() {
   db="$(msg_db)"
 
   # Parse JSON
-  local msg_id created_at source dest topic job_id lease_token payload_json
+  local msg_id created_at source dest topic payload_json
   msg_id=$(jq -r '.message_id' "$file_path")
   created_at=$(jq -r '.created_at' "$file_path")
   source=$(jq -r '.source' "$file_path")
   dest=$(jq -r '.dest' "$file_path")
   topic=$(jq -r '.topic' "$file_path")
-  job_id=$(jq -r '.job_id // empty' "$file_path")
-  lease_token=$(jq -r '.lease_token // empty' "$file_path")
   payload_json=$(jq -c '.payload' "$file_path")
 
   # Escape for SQL
-  local esc_msg_id esc_source esc_dest esc_topic esc_job_id esc_lease_token esc_payload
+  local esc_msg_id esc_source esc_dest esc_topic esc_payload
   esc_msg_id=$(sql_escape "$msg_id")
   esc_source=$(sql_escape "$source")
   esc_dest=$(sql_escape "$dest")
   esc_topic=$(sql_escape "$topic")
-  esc_job_id=$(sql_escape "$job_id")
-  esc_lease_token=$(sql_escape "$lease_token")
   esc_payload=$(sql_escape "$payload_json")
 
   # Insert with ON CONFLICT for idempotency
   local db_err
   if db_err=$(duckdb "$db" "
-    INSERT INTO messages (message_id, created_at, source, dest, topic, job_id, lease_token, payload_json)
-    VALUES ('$esc_msg_id', '$created_at', '$esc_source', '$esc_dest', '$esc_topic',
-            $([ -n "$job_id" ] && echo "'$esc_job_id'" || echo "NULL"),
-            $([ -n "$lease_token" ] && echo "'$esc_lease_token'" || echo "NULL"),
-            '$esc_payload')
+    INSERT INTO messages (message_id, created_at, source, dest, topic, payload_json)
+    VALUES ('$esc_msg_id', '$created_at', '$esc_source', '$esc_dest', '$esc_topic', '$esc_payload')
     ON CONFLICT (message_id) DO NOTHING;
   " 2>&1); then
     # Ack: remove file
@@ -338,30 +329,6 @@ daemon_claim_one() {
   return 1
 }
 
-daemon_exec_cmd() {
-  local cmd="$1"
-  local cwd="$2"
-  # shellcheck disable=SC2034  # Reserved for future env var injection
-  local env_json="$3"
-  local timeout_s="${4:-1800}"
-
-  local result exit_code
-
-  # Expand ~ in cwd
-  cwd="${cwd/#\~/$HOME}"
-
-  # Change to working directory if specified
-  if [[ -n "$cwd" && -d "$cwd" ]]; then
-    cd "$cwd"
-  fi
-
-  # Execute with timeout
-  result=$(timeout "$timeout_s" bash -c "$cmd" 2>&1) && exit_code=$? || exit_code=$?
-
-  echo "$result"
-  return $exit_code
-}
-
 emit_cmd_result() {
   local request_id="$1"
   local exit_code="$2"
@@ -399,33 +366,22 @@ emit_cmd_result() {
   write_msg_file "cmd.result" "$dest" "$payload_json"
 }
 
-daemon_process_one() {
+# Fetch next unhandled cmd.exec message for this identity
+# Outputs JSON: {"msg_id":"...", "cmd":"...", "cwd":"...", "timeout_s":..., "request_id":"...", "source":"..."}
+# Returns 1 if no message found
+fetch_pending_cmd_exec() {
   local my_identity="$1"
-
-  # Claim a message
-  local claimed_file
-  claimed_file=$(daemon_claim_one) || return 1
-
-  # Ingest into database (ingest_err captures stderr for debugging)
-  local ingest_err
-  # shellcheck disable=SC2034
-  if ! ingest_err=$(ingest_queue_file "$claimed_file" 2>&1); then
-    log "Failed to ingest claimed file: $claimed_file"
-    return 1
-  fi
-
-  # Escape identity for SQL query (prevent injection)
   local escaped_identity
   escaped_identity=$(sql_escape "$my_identity")
 
-  # Find unhandled cmd.exec messages for us
-  local msg_row db_err
+  local msg_row
   if ! msg_row=$(duckdb "$(msg_db)" -json "
-    SELECT message_id, payload_json
+    SELECT message_id, payload_json, source
     FROM messages
     WHERE dest = '$escaped_identity'
       AND topic = 'cmd.exec'
       AND handled_at IS NULL
+      AND submitted IS NULL
     ORDER BY created_at
     LIMIT 1
   " 2>&1); then
@@ -433,11 +389,13 @@ daemon_process_one() {
     return 1
   fi
 
-  [[ -n "$msg_row" && "$msg_row" != "[]" ]] || return 0
+  [[ -n "$msg_row" && "$msg_row" != "[]" ]] || return 1
 
-  local msg_id payload_json cmd cwd timeout_s request_id source
+  # Extract fields and output as JSON for caller
+  local msg_id payload_json source cmd cwd timeout_s request_id
   msg_id=$(echo "$msg_row" | jq -r '.[0].message_id')
   payload_json=$(echo "$msg_row" | jq -r '.[0].payload_json')
+  source=$(echo "$msg_row" | jq -r '.[0].source')
 
   # SECURITY NOTE: Commands from inbox are executed without sanitization.
   # This is intentional - the inbox system is designed to execute arbitrary commands.
@@ -447,32 +405,31 @@ daemon_process_one() {
   timeout_s=$(echo "$payload_json" | jq -r '.timeout_s // 1800')
   request_id=$(echo "$payload_json" | jq -r '.request_id // empty')
 
-  # Get source for reply (escape msg_id to prevent SQL injection)
+  jq -n \
+    --arg msg_id "$msg_id" \
+    --arg cmd "$cmd" \
+    --arg cwd "$cwd" \
+    --argjson timeout_s "$timeout_s" \
+    --arg request_id "$request_id" \
+    --arg source "$source" \
+    '{msg_id: $msg_id, cmd: $cmd, cwd: $cwd, timeout_s: $timeout_s, request_id: $request_id, source: $source}'
+}
+
+# Mark message as handled and emit result to source
+complete_cmd_exec() {
+  local msg_id="$1"
+  local source="$2"
+  local request_id="$3"
+  local exit_code="$4"
+  local artifact_dir="$5"
+  local started_at="$6"
+  local ended_at="$7"
+
   local escaped_msg_id
   escaped_msg_id=$(sql_escape "$msg_id")
-  source=$(duckdb "$(msg_db)" -noheader -csv "SELECT source FROM messages WHERE message_id='$escaped_msg_id'")
 
-  # Create artifact directory
-  local artifact_dir started_at ended_at
-  artifact_dir="$(artifacts_root)/${request_id:-$msg_id}"
-  mkdir -p "$artifact_dir"
+  duckdb "$(msg_db)" "UPDATE messages SET handled_at = current_timestamp, submitted = NULL WHERE message_id = '$escaped_msg_id'"
 
-  started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-  # Execute command
-  local result exit_code
-  result=$(daemon_exec_cmd "$cmd" "$cwd" "" "$timeout_s" 2>&1) && exit_code=$? || exit_code=$?
-
-  ended_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-  # Save artifacts
-  echo "$result" > "$artifact_dir/stdout.txt"
-  echo "" > "$artifact_dir/stderr.txt"  # stderr captured in stdout via 2>&1
-
-  # Mark as handled (use escaped_msg_id from earlier)
-  duckdb "$(msg_db)" "UPDATE messages SET handled_at = current_timestamp WHERE message_id = '$escaped_msg_id'"
-
-  # Emit result (but don't deliver in this function - let caller handle)
   if [[ -n "$source" ]]; then
     emit_cmd_result \
       "${request_id:-$msg_id}" \
@@ -482,8 +439,141 @@ daemon_process_one() {
       "$started_at" \
       "$ended_at" \
       "$source" >/dev/null
-    # Note: actual delivery would be done by a separate sender loop or inline
   fi
+}
+
+# Submit a command to nq for sequential execution
+nq_submit_job() {
+  local msg_id="$1"
+  local cmd="$2"
+  local cwd="$3"
+  local artifact_id="$4"
+  local source="$5"
+  local request_id="$6"
+
+  local artifact_dir nq_home
+  artifact_dir="$(artifacts_root)/$artifact_id"
+  nq_home="$(nq_dir)"
+  mkdir -p "$artifact_dir"
+
+  # Expand ~ in cwd
+  cwd="${cwd/#\~/$HOME}"
+
+  # Record start time
+  local started_at
+  started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+  # Submit to nq (sequential queue)
+  # nq outputs the job filename (e.g., ,1234567890.123)
+  local nq_job
+  nq_job=$(cd "${cwd:-.}" 2>/dev/null || cd ~; NQDIR="$nq_home" nq timeout "$CMD_TIMEOUT_S" bash -c "$cmd")
+
+  # Store job metadata for later lookup (avoid DB queries during reap)
+  local meta_file="$nq_home/${nq_job}.meta"
+  cat > "$meta_file" << EOF
+msg_id=$msg_id
+artifact_dir=$artifact_dir
+started_at=$started_at
+source=$source
+request_id=$request_id
+EOF
+
+  log "Submitted to nq: msg=$msg_id job=$nq_job"
+}
+
+# Check nq jobs for completion, reap finished ones
+nq_check_jobs() {
+  local nq_home
+  nq_home="$(nq_dir)"
+
+  for job_file in "$nq_home"/,*; do
+    [[ -f "$job_file" ]] || continue
+    [[ "$job_file" == *.meta ]] && continue  # skip metadata files
+
+    # Job still running if execute bit is set
+    [[ -x "$job_file" ]] && continue
+
+    # Job complete - find its metadata
+    local meta_file="${job_file}.meta"
+    [[ -f "$meta_file" ]] || continue
+
+    # Read metadata from file (key=value format)
+    local msg_id artifact_dir started_at msg_source request_id
+    eval "$(sed 's/^source=/msg_source=/' "$meta_file")"
+
+    if [[ -z "$msg_id" || -z "$artifact_dir" ]]; then
+      log "Warning: Invalid metadata in $meta_file - skipping"
+      continue
+    fi
+
+    log "Reaping job for msg=$msg_id"
+
+    # Ensure artifact_dir exists
+    mkdir -p "$artifact_dir"
+
+    # Copy nq output to artifact (nq captures stdout/stderr in job file)
+    # Skip the first line (exec command) for cleaner output
+    tail -n +2 "$job_file" > "$artifact_dir/stdout.txt" 2>/dev/null || true
+    echo "" > "$artifact_dir/stderr.txt"
+
+    # Determine exit code - nq doesn't capture it, check for timeout signature
+    local exit_code=0
+    if grep -q "^Killed$" "$artifact_dir/stdout.txt" 2>/dev/null; then
+      exit_code=124
+    fi
+
+    local ended_at
+    ended_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+    complete_cmd_exec "$msg_id" "$msg_source" "$request_id" "$exit_code" "$artifact_dir" "$started_at" "$ended_at"
+
+    log "Reaped nq job: msg=$msg_id exit=$exit_code"
+
+    # Cleanup nq files
+    rm -f "$job_file" "$meta_file"
+  done
+}
+
+# Claim and ingest one queue file into the database
+daemon_ingest_one() {
+  local claimed_file
+  claimed_file=$(daemon_claim_one) || return 1
+
+  local ingest_err
+  # shellcheck disable=SC2034
+  if ! ingest_err=$(ingest_queue_file "$claimed_file" 2>&1); then
+    log "Failed to ingest claimed file: $claimed_file"
+    return 1
+  fi
+}
+
+# Process one pending message: claim, ingest, submit to nq
+# Returns immediately after submitting (nq handles sequential execution)
+daemon_process_one() {
+  local my_identity="$1"
+
+  # Claim and ingest a queue file
+  daemon_ingest_one || return 1
+
+  # Fetch next pending command (excludes already-running jobs)
+  local msg_json
+  msg_json=$(fetch_pending_cmd_exec "$my_identity") || return 0
+
+  # Parse message fields
+  local msg_id cmd cwd request_id source
+  msg_id=$(echo "$msg_json" | jq -r '.msg_id')
+  cmd=$(echo "$msg_json" | jq -r '.cmd')
+  cwd=$(echo "$msg_json" | jq -r '.cwd')
+  request_id=$(echo "$msg_json" | jq -r '.request_id')
+  source=$(echo "$msg_json" | jq -r '.source')
+
+  # Submit to nq for sequential execution
+  nq_submit_job "$msg_id" "$cmd" "$cwd" "${request_id:-$msg_id}" "$source" "$request_id"
+
+  # Mark as running in DB (for fetch_pending_cmd_exec exclusion)
+  local escaped_msg_id
+  escaped_msg_id=$(sql_escape "$msg_id")
+  duckdb "$(msg_db)" "UPDATE messages SET submitted = 1 WHERE message_id = '$escaped_msg_id'"
 
   return 0
 }
@@ -494,10 +584,6 @@ need_flagship() {
 
 flagship() {
   jq -r '.flagship' "$CONFIG_FILE"
-}
-
-flagship_vm() {
-  jq -r '.flagship_vm' "$CONFIG_FILE"
 }
 
 flagship_ssh() {
@@ -1021,17 +1107,6 @@ EOF
 EOF
   fi
 
-  # Set up SSH keys if provided via env
-  if [[ -n "${SHIP_SSH_PRIVKEY_B64:-}" && -n "${SHIP_SSH_PUBKEY_B64:-}" ]]; then
-    log "Installing SSH keys from env..."
-    mkdir -p ~/.ssh
-    chmod 700 ~/.ssh
-    echo "$SHIP_SSH_PRIVKEY_B64" | base64 -d > ~/.ssh/id_ed25519
-    echo "$SHIP_SSH_PUBKEY_B64" | base64 -d > ~/.ssh/id_ed25519.pub
-    chmod 600 ~/.ssh/id_ed25519
-    chmod 644 ~/.ssh/id_ed25519.pub
-  fi
-
   run_init_script captain \
     "TARGET_REPO=$repo" \
     "SHIP_SSH_PRIVKEY_B64=${SHIP_SSH_PRIVKEY_B64:-}" \
@@ -1180,13 +1255,18 @@ cmd__scheduler() {
   # Set up graceful shutdown
   trap 'daemon_shutdown_handler' SIGTERM SIGINT
 
-  log "v2 Scheduler starting for $identity (poll: ${poll_interval}s)"
+  log "v2 Scheduler starting for $identity (poll: ${poll_interval}s, timeout: ${CMD_TIMEOUT_S}s, queue: nq)"
 
   # Recover any abandoned claims from previous crash
   daemon_recover_claimed
 
+  # Note: nq handles orphan recovery via flock - no action needed on restart
+
   while [[ $DAEMON_SHUTDOWN -eq 0 ]]; do
-    # Process all pending messages
+    # Check nq jobs for completion
+    nq_check_jobs
+
+    # Process all pending messages (submits to nq for sequential execution)
     while daemon_process_one "$identity"; do
       [[ $DAEMON_SHUTDOWN -eq 0 ]] || break
     done

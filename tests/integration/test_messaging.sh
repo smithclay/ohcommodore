@@ -145,11 +145,12 @@ main() {
   # ============================================
   log_test "Processing message via scheduler..."
 
-  # Run scheduler for a short time in background, then kill it
+  # Run scheduler for enough time to start AND reap background job
+  # With 10s poll interval, need ~25s for: start job (cycle 1) + reap job (cycle 2)
   ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ship_a_dest" '
-    timeout 15 ~/.local/bin/ohcommodore _scheduler &
+    timeout 30 ~/.local/bin/ohcommodore _scheduler &
     SCHED_PID=$!
-    sleep 10
+    sleep 25
     kill $SCHED_PID 2>/dev/null || true
   ' 2>&1 || true
 
@@ -263,10 +264,11 @@ main() {
 
   log_test "Processing ship-to-ship message on ship B..."
 
+  # Run scheduler for enough time to start AND reap background job
   ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ship_b_dest" '
-    timeout 20 ~/.local/bin/ohcommodore _scheduler &
+    timeout 30 ~/.local/bin/ohcommodore _scheduler &
     SCHED_PID=$!
-    sleep 12
+    sleep 25
     kill $SCHED_PID 2>/dev/null || true
   ' 2>&1 || true
 

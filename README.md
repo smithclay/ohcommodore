@@ -138,11 +138,11 @@ ohcommodore inbox delete <id>      # Remove message
 
 ### How It Works
 
-- Each VM has a DuckDB database at `~/.local/ship/data.duckdb`
-- When sending a message, the sender SSHes to the recipient and INSERTs directly into their inbox table
+- Each VM has a DuckDB database at `~/.ohcommodore/ns/<namespace>/data.duckdb`
+- Messages are delivered via SCP to a file-based queue, then ingested into the database
 - The `ohcommodore _scheduler` daemon polls for unread messages and executes commands
-- Results (stdout, exit code) are stored back in the database
-- Message statuses: `unread` → `running` → `done`/`error`
+- Results (stdout, stderr) are stored in the artifacts directory
+- Message statuses: `unread` → `done` (tracked via `handled_at` timestamp)
 
 ## Requirements
 

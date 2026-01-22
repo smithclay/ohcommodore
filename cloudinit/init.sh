@@ -134,6 +134,15 @@ else
   log "DuckDB already installed — skipping"
 fi
 
+log "Installing nq (job queue utility)..."
+if ! need_cmd nq; then
+  git clone --depth 1 https://github.com/leahneukirchen/nq /tmp/nq
+  cd /tmp/nq && make && sudo make install PREFIX=/usr/local
+  rm -rf /tmp/nq
+else
+  log "nq already installed — skipping"
+fi
+
 log "Setting up SSH keys..."
 mkdir -p ~/.ssh
 chmod 700 ~/.ssh
