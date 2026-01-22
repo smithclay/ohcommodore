@@ -226,6 +226,46 @@ SSHCONFIG
   chmod 600 ~/.ssh/config
 fi
 
+# ──────────────────────────────────────────────────────────
+# Email infrastructure (captain/ships only)
+# ──────────────────────────────────────────────────────────
+
+if [[ "${ROLE:-}" == "captain" && -n "${FLAGSHIP_SSH_DEST:-}" ]]; then
+  log "Installing autossh for SMTP tunnel..."
+  if ! need_cmd autossh; then
+    sudo apt-get update -qq
+    sudo apt-get install -y autossh
+  fi
+
+  log "Adding flagship to /etc/hosts..."
+  if ! grep -q '^127\.0\.0\.1.*flagship' /etc/hosts; then
+    echo "127.0.0.1 flagship" | sudo tee -a /etc/hosts > /dev/null
+  fi
+
+  log "Creating Maildir for ship identity..."
+  mkdir -p ~/Maildir/"${SHIP_ID:-captain}"/{new,cur,tmp}
+
+  log "Creating autossh tunnel service..."
+  sudo tee /etc/systemd/system/ohcom-tunnel.service > /dev/null << TUNNEL_EOF
+[Unit]
+Description=ohcommodore SMTP tunnel to flagship
+After=network.target
+
+[Service]
+User=exedev
+ExecStart=/usr/bin/autossh -M 0 -N -o "ServerAliveInterval 30" -o "ServerAliveCountMax 3" -L 25:localhost:25 ${FLAGSHIP_SSH_DEST}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+TUNNEL_EOF
+
+  log "Starting SMTP tunnel..."
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now ohcom-tunnel
+fi
+
 log "Setting up ship directories..."
 mkdir -p ~/.local/bin ~/.ohcommodore/ns/default
 
