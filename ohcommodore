@@ -528,6 +528,23 @@ cmd_ship_create() {
   esac
 }
 
+# Database helpers for ship management
+_register_ship() {
+  local ship_id="$1" repo="$2" ssh_dest="$3" status="${4:-creating}"
+  local escaped_id escaped_repo escaped_dest
+  escaped_id=$(sql_escape "$ship_id")
+  escaped_repo=$(sql_escape "$repo")
+  escaped_dest=$(sql_escape "$ssh_dest")
+  duckdb "$(msg_db)" "INSERT INTO ships (id, repo, ssh_dest, status) VALUES ('$escaped_id', '$escaped_repo', '$escaped_dest', '$status');"
+}
+
+_update_ship_status() {
+  local ship_id="$1" status="$2"
+  local escaped_id
+  escaped_id=$(sql_escape "$ship_id")
+  duckdb "$(msg_db)" "UPDATE ships SET status = '$status' WHERE id = '$escaped_id';"
+}
+
 _ship_create_impl() {
   local arg="$1"
   local repo="" name=""
@@ -537,60 +554,49 @@ _ship_create_impl() {
     repo="$arg"
     name="${repo##*/}"
     log "Validating repo '$repo' exists..."
-    if ! gh repo view "$repo" --json nameWithOwner >/dev/null 2>&1; then
-      die "Repository '$repo' not found or not accessible with current token"
-    fi
+    gh repo view "$repo" --json nameWithOwner >/dev/null 2>&1 \
+      || die "Repository '$repo' not found or not accessible with current token"
     log "Repo validated: $repo"
   else
     name="$arg"
     log "Creating empty ship '$name' (no repo)"
   fi
 
-  # Generate unique ship ID
   local ship_id
   ship_id=$(generate_ship_id "$name")
 
-  # Use fleet SSH key (all ships share the same key as flagship)
+  # Get fleet SSH key
   log "Using fleet SSH key..."
-  local cluster_privkey_b64 cluster_pubkey_b64
-  cluster_privkey_b64=$(base64 < ~/.ssh/id_ed25519 | tr -d '\n')
-  cluster_pubkey_b64=$(base64 < ~/.ssh/id_ed25519.pub | tr -d '\n')
+  local privkey_b64 pubkey_b64
+  privkey_b64=$(base64 < ~/.ssh/id_ed25519 | tr -d '\n')
+  pubkey_b64=$(base64 < ~/.ssh/id_ed25519.pub | tr -d '\n')
 
-  # Create VM and get connection info
+  # Create VM
   local vm_output ssh_dest init_env dotfiles_env
   vm_output=$(_create_vm "ship-${ship_id}" --wait-dns)
   ssh_dest=$(echo "$vm_output" | sed -n '1p')
   init_env=$(echo "$vm_output" | sed -n '2p')
   dotfiles_env=$(echo "$vm_output" | sed -n '3p')
 
-  # Register ship in database
-  log "Registering ship in ships table..."
-  local escaped_id escaped_repo escaped_dest
-  escaped_id=$(sql_escape "$ship_id")
-  escaped_repo=$(sql_escape "$repo")
-  escaped_dest=$(sql_escape "$ssh_dest")
+  log "Registering ship..."
+  _register_ship "$ship_id" "$repo" "$ssh_dest"
 
-  duckdb "$(msg_db)" "
-    INSERT INTO ships (id, repo, ssh_dest, status)
-    VALUES ('$escaped_id', '$escaped_repo', '$escaped_dest', 'creating');
-  "
-
-  # Run captain init
+  # Build init environment
   log "Running captain init on ship..."
-  local flagship_hostname flagship_ssh_dest
-  flagship_hostname=$(hostname -f 2>/dev/null || hostname)
-  flagship_ssh_dest="exedev@$flagship_hostname"
+  local flagship_host init_args
+  flagship_host="exedev@$(hostname -f 2>/dev/null || hostname)"
 
-  local gh_token_env=""
-  [[ -n "${GH_TOKEN:-}" && -n "$repo" ]] && gh_token_env="GH_TOKEN=$(printf %q "$GH_TOKEN")"
-  ssh "$ssh_dest" \
-    "$gh_token_env $init_env $dotfiles_env FLAGSHIP_SSH_DEST=$(printf %q "$flagship_ssh_dest") SHIP_ID=$(printf %q "$ship_id") SHIP_SSH_PRIVKEY_B64=$(printf %q "$cluster_privkey_b64") SHIP_SSH_PUBKEY_B64=$(printf %q "$cluster_pubkey_b64") ~/.local/bin/ohcommodore _init_captain $(printf %q "$repo")"
+  init_args="$init_env $dotfiles_env"
+  init_args="$init_args FLAGSHIP_SSH_DEST=$(printf %q "$flagship_host")"
+  init_args="$init_args SHIP_ID=$(printf %q "$ship_id")"
+  init_args="$init_args SHIP_SSH_PRIVKEY_B64=$(printf %q "$privkey_b64")"
+  init_args="$init_args SHIP_SSH_PUBKEY_B64=$(printf %q "$pubkey_b64")"
+  [[ -n "${GH_TOKEN:-}" && -n "$repo" ]] && init_args="GH_TOKEN=$(printf %q "$GH_TOKEN") $init_args"
 
-  # Update ship status to ready
-  log "Updating ship status to ready..."
-  duckdb "$(msg_db)" "
-    UPDATE ships SET status = 'ready' WHERE id = '$escaped_id';
-  "
+  ssh "$ssh_dest" "$init_args ~/.local/bin/ohcommodore _init_captain $(printf %q "$repo")"
+
+  log "Updating ship status..."
+  _update_ship_status "$ship_id" "ready"
 
   log "Created ship: $ship_id"
 }
@@ -616,58 +622,76 @@ cmd_ship_destroy() {
 
 _ship_destroy_impl() {
   local prefix="$1"
-
-  # Resolve prefix to ship ID
   local ship_id
   ship_id=$(resolve_ship_prefix "$prefix")
 
-  local escaped_id
-  escaped_id=$(sql_escape "$ship_id")
-
-  log "Setting status to destroying..."
-  duckdb "$(msg_db)" "UPDATE ships SET status = 'destroying' WHERE id = '$escaped_id'"
-
-  log "Removing VM ship-${ship_id}..."
-  timeout 30 ssh exe.dev rm "ship-${ship_id}" || log "Warning: VM removal timed out or failed"
-
-  log "Removing from ships registry..."
-  duckdb "$(msg_db)" "DELETE FROM ships WHERE id = '$escaped_id'"
+  _update_ship_status "$ship_id" "destroying"
+  _remove_exe_vm "ship-${ship_id}"
+  _delete_ship "$ship_id"
 
   log "Ship '$ship_id' destroyed."
 }
 
+_delete_ship() {
+  local ship_id="$1"
+  local escaped_id
+  escaped_id=$(sql_escape "$ship_id")
+  duckdb "$(msg_db)" "DELETE FROM ships WHERE id = '$escaped_id';"
+}
+
 cmd_ship_ssh() {
-  need_flagship
   local prefix="$1"
   [[ -n "$prefix" ]] || die "Usage: ohcommodore ship ssh <prefix>"
 
-  local escaped_prefix
-  escaped_prefix=$(sql_like_escape "$prefix")
-
-  # Get matching ships
-  local matches
-  matches=$(flagship_ssh "duckdb ~/.ohcommodore/ns/${OHCOM_NS:-default}/data.duckdb -noheader -csv \"SELECT id, ssh_dest FROM ships WHERE id LIKE '${escaped_prefix}%' ESCAPE '\\'\"" 2>/dev/null)
-
-  local count
-  if [[ -z "$matches" ]]; then
-    count=0
-  else
-    count=$(echo "$matches" | wc -l | tr -d ' ')
-  fi
-
-  case "$count" in
-    0) die "No ship matches '$prefix'" ;;
-    1)
+  case "$(get_role)" in
+    local)
+      need_flagship
+      # Delegate to flagship's resolver
+      local result
+      result=$(flagship_ssh "~/.local/bin/ohcommodore _ship_resolve $(shell_quote "$prefix")") \
+        || die "No ship matches '$prefix'"
+      exec ssh -o StrictHostKeyChecking=accept-new "$result"
+      ;;
+    commodore)
       local dest
-      dest=$(echo "$matches" | cut -d',' -f2)
+      dest=$(_ship_resolve "$prefix")
       exec ssh -o StrictHostKeyChecking=accept-new "$dest"
       ;;
-    *)
-      local ids
-      ids=$(echo "$matches" | cut -d',' -f1 | tr '\n' ' ')
-      die "Multiple ships match '$prefix': $ids"
+    captain)
+      die "Cannot SSH to ships from a ship"
       ;;
   esac
+}
+
+# Internal: resolve ship prefix to ssh_dest (runs on flagship)
+cmd__ship_resolve() {
+  local prefix="$1"
+  [[ -n "$prefix" ]] || die "Usage: _ship_resolve <prefix>"
+
+  local ship_id ssh_dest
+  ship_id=$(resolve_ship_prefix "$prefix")
+  ssh_dest=$(lookup_ship_ssh_dest "$ship_id") || die "Ship '$ship_id' has no ssh_dest"
+  echo "$ssh_dest"
+}
+
+_ship_resolve() {
+  cmd__ship_resolve "$@"
+}
+
+# Shared helpers for fleet sink
+_confirm_sink() {
+  local force="$1"
+  [[ "$force" == true ]] && return 0
+  echo ""
+  printf "Type 'sink' to confirm: "
+  read -r confirm
+  [[ "$confirm" == "sink" ]] || die "Aborted."
+}
+
+_remove_exe_vm() {
+  local vm="$1" label="${2:-Removing}"
+  log "$label $vm..."
+  timeout 30 ssh -n exe.dev rm "$vm" 2>/dev/null || log "Warning: Failed to remove $vm"
 }
 
 cmd_fleet_sink() {
@@ -681,7 +705,6 @@ cmd_fleet_sink() {
   done
 
   # --direct mode: bypass flagship, remove VMs directly from exe.dev
-  # Useful for cleaning up orphaned VMs from crashed/failed runs
   if [[ "$direct" == true ]]; then
     _fleet_sink_direct "$force" "$scuttle"
     return
@@ -690,38 +713,16 @@ cmd_fleet_sink() {
   case "$(get_role)" in
     local)
       need_flagship
-
-      # Sink ships on flagship (never pass --scuttle to flagship - we handle it locally)
       local args=""
-      [[ "$force" == true ]] && args="$args --force"
+      [[ "$force" == true ]] && args="--force"
       flagship_ssh "~/.local/bin/ohcommodore fleet sink $args"
 
       if [[ "$scuttle" == true ]]; then
-        # Delete flagship VM directly from local (flagship can't delete itself)
-        log "Scuttling flagship from local..."
-        local flagship_vm cluster_pubkey_b64
-        flagship_vm=$(jq -r '.flagship_vm' "$CONFIG_FILE")
-        cluster_pubkey_b64=$(jq -r '.cluster_pubkey_b64 // empty' "$CONFIG_FILE")
-
-        log "Removing VM $flagship_vm..."
-        timeout 30 ssh exe.dev rm "$flagship_vm" || log "Warning: VM removal timed out or failed"
-
-        # Remove fleet SSH key from exe.dev
-        if [[ -n "$cluster_pubkey_b64" ]]; then
-          log "Removing fleet SSH key from exe.dev..."
-          local cluster_pubkey
-          cluster_pubkey=$(echo "$cluster_pubkey_b64" | base64_decode)
-          ssh -n exe.dev ssh-key remove "$cluster_pubkey" 2>/dev/null || log "Warning: Could not remove fleet SSH key"
-        fi
-
-        log "Fleet decommissioned."
-        log "Removing local config..."
-        rm -rf "$CONFIG_DIR"
+        _scuttle_flagship
       fi
       ;;
     commodore)
-      # On flagship, only sink ships - scuttle is handled by local CLI
-      _fleet_sink_impl "$force" false
+      _fleet_sink_impl "$force"
       ;;
     captain)
       die "Fleet sink not available from ships"
@@ -729,65 +730,54 @@ cmd_fleet_sink() {
   esac
 }
 
-# Direct cleanup - bypasses flagship, removes VMs directly from exe.dev
-# Used for cleaning up orphaned VMs when flagship is unreachable or state is corrupted
+_scuttle_flagship() {
+  log "Scuttling flagship from local..."
+  local flagship_vm cluster_pubkey_b64
+  flagship_vm=$(jq -r '.flagship_vm' "$CONFIG_FILE")
+  cluster_pubkey_b64=$(jq -r '.cluster_pubkey_b64 // empty' "$CONFIG_FILE")
+
+  _remove_exe_vm "$flagship_vm" "Scuttling"
+
+  if [[ -n "$cluster_pubkey_b64" ]]; then
+    log "Removing fleet SSH key from exe.dev..."
+    local cluster_pubkey
+    cluster_pubkey=$(echo "$cluster_pubkey_b64" | base64_decode)
+    ssh -n exe.dev ssh-key remove "$cluster_pubkey" 2>/dev/null || log "Warning: Could not remove fleet SSH key"
+  fi
+
+  log "Removing local config..."
+  rm -rf "$CONFIG_DIR"
+  log "Fleet decommissioned."
+}
+
 _fleet_sink_direct() {
   local force="$1" scuttle="$2"
-
   log "Direct cleanup mode: bypassing flagship..."
 
-  # Get all ohcommodore VMs from exe.dev
-  local all_vms flagship_vms ship_vms
+  local all_vms ship_vms flagship_vms
   all_vms=$(ssh exe.dev ls 2>/dev/null | grep -oE '(flagship|ship)-[a-zA-Z0-9_-]+' || true)
-  flagship_vms=$(echo "$all_vms" | grep -E '^flagship-' || true)
   ship_vms=$(echo "$all_vms" | grep -E '^ship-' || true)
+  flagship_vms=$(echo "$all_vms" | grep -E '^flagship-' || true)
 
-  if [[ -z "$all_vms" ]]; then
-    log "No ohcommodore VMs found on exe.dev"
+  if [[ -z "$ship_vms" && ( -z "$flagship_vms" || "$scuttle" != true ) ]]; then
+    log "No ohcommodore VMs to remove"
   else
-    echo "Found VMs to remove:"
-    [[ -n "$ship_vms" ]] && while read -r vm; do printf '  - %s\n' "$vm"; done <<< "$ship_vms"
-    [[ -n "$flagship_vms" && "$scuttle" == true ]] && while read -r vm; do printf '  - %s\n' "$vm"; done <<< "$flagship_vms"
+    echo "VMs to remove:"
+    [[ -n "$ship_vms" ]] && echo "$ship_vms" | while read -r vm; do [[ -n "$vm" ]] && echo "  - $vm"; done
+    [[ -n "$flagship_vms" && "$scuttle" == true ]] && echo "$flagship_vms" | while read -r vm; do [[ -n "$vm" ]] && echo "  - $vm"; done
 
-    if [[ "$force" != true ]]; then
-      echo ""
-      printf "Type 'sink' to confirm: "
-      read -r confirm
-      [[ "$confirm" == "sink" ]] || die "Aborted."
-    fi
+    _confirm_sink "$force"
 
-    # Remove ship VMs
-    if [[ -n "$ship_vms" ]]; then
-      while IFS= read -r vm; do
-        [[ -n "$vm" ]] || continue
-        log "Removing $vm..."
-        ssh -n exe.dev rm "$vm" 2>/dev/null || log "Warning: Failed to remove $vm"
-      done <<< "$ship_vms"
-    fi
-
-    # Remove flagship VMs if --scuttle
-    if [[ "$scuttle" == true && -n "$flagship_vms" ]]; then
-      while IFS= read -r vm; do
-        [[ -n "$vm" ]] || continue
-        log "Scuttling $vm..."
-        ssh -n exe.dev rm "$vm" 2>/dev/null || log "Warning: Failed to remove $vm"
-      done <<< "$flagship_vms"
-    fi
+    [[ -n "$ship_vms" ]] && echo "$ship_vms" | while read -r vm; do [[ -n "$vm" ]] && _remove_exe_vm "$vm"; done
+    [[ -n "$flagship_vms" && "$scuttle" == true ]] && echo "$flagship_vms" | while read -r vm; do [[ -n "$vm" ]] && _remove_exe_vm "$vm" "Scuttling"; done
   fi
 
-  # Remove local config
-  if [[ -d "$CONFIG_DIR" ]]; then
-    log "Removing local config..."
-    rm -rf "$CONFIG_DIR"
-  fi
-
+  [[ -d "$CONFIG_DIR" ]] && { log "Removing local config..."; rm -rf "$CONFIG_DIR"; }
   log "Direct cleanup complete."
 }
 
 _fleet_sink_impl() {
   local force="$1"
-  # Note: scuttle is handled by local CLI, not here
-
   local ships_data
   ships_data=$(duckdb "$(msg_db)" -noheader -csv "SELECT id, repo FROM ships" 2>/dev/null || echo "")
 
@@ -795,24 +785,16 @@ _fleet_sink_impl() {
     echo "No ships to sink."
   else
     echo "WARNING: This will destroy all ships:"
-    echo "$ships_data" | while IFS=',' read -r id repo; do
-      echo "  - $id ($repo)"
-    done
+    echo "$ships_data" | while IFS=',' read -r id repo; do echo "  - $id ($repo)"; done
 
-    if [[ "$force" != true ]]; then
-      echo ""
-      printf "Type 'sink' to confirm: "
-      read -r confirm
-      [[ "$confirm" == "sink" ]] || die "Aborted."
-    fi
+    _confirm_sink "$force"
 
-    while IFS=',' read -r id _repo; do
+    echo "$ships_data" | while IFS=',' read -r id _repo; do
       log "Sinking $id..."
       _ship_destroy_impl "$id" >/dev/null
-    done <<< "$ships_data"
+    done
     log "Fleet sunk."
   fi
-
   echo "Flagship still running."
 }
 
@@ -1247,6 +1229,7 @@ case "${1:-help}" in
   inbox) shift; cmd_inbox "$@" ;;
   _init_commodore) cmd__init_commodore ;;
   _init_captain) cmd__init_captain "${2:-}" ;;
+  _ship_resolve) cmd__ship_resolve "${2:-}" ;;
   _scheduler) cmd__scheduler ;;
   *) die "Unknown command: $1. Run 'ohcommodore help' for usage." ;;
 esac
