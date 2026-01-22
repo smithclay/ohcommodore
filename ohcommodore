@@ -45,6 +45,11 @@ uuid_gen() {
   uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid
 }
 
+# Portable base64 decode (works on both Linux and macOS)
+base64_decode() {
+  openssl base64 -d -A
+}
+
 generate_ship_id() {
   local repo_name="$1"
   local suffix
@@ -57,8 +62,10 @@ resolve_ship_prefix() {
   local escaped_prefix
   escaped_prefix=$(sql_like_escape "$prefix")
 
-  local matches
-  matches=$(duckdb "$(msg_db)" -csv -noheader "SELECT id FROM ships WHERE id LIKE '${escaped_prefix}%' ESCAPE '\\'" 2>/dev/null || echo "")
+  local matches db_err
+  if ! matches=$(duckdb "$(msg_db)" -csv -noheader "SELECT id FROM ships WHERE id LIKE '${escaped_prefix}%' ESCAPE '\\'" 2>&1); then
+    die "Database error looking up ship: $matches"
+  fi
 
   local count
   if [[ -z "$matches" ]]; then
@@ -80,18 +87,24 @@ lookup_ship_ssh_dest() {
   escaped_id=$(sql_escape "$ship_id")
   local query="SELECT ssh_dest FROM ships WHERE id = '$escaped_id'"
 
-  local role
+  local role db_result
   role=$(get_role)
-  local ssh_dest
   if [[ "$role" == "commodore" ]]; then
-    ssh_dest=$(duckdb "$(msg_db)" -noheader -csv "$query" 2>/dev/null || echo "")
+    if ! db_result=$(duckdb "$(msg_db)" -noheader -csv "$query" 2>&1); then
+      log "ERROR: Database query failed: $db_result"
+      return 1
+    fi
   else
     need_flagship
-    ssh_dest=$(flagship_ssh "duckdb ~/.ohcommodore/ns/${OHCOM_NS:-default}/data.duckdb -noheader -csv \"${query}\"" 2>/dev/null || echo "")
+    # Suppress stderr to avoid SSH warnings corrupting result; failures detected via exit code
+    if ! db_result=$(flagship_ssh "duckdb ~/.ohcommodore/ns/${OHCOM_NS:-default}/data.duckdb -noheader -csv \"${query}\"" 2>/dev/null); then
+      log "ERROR: Flagship database query failed for ship '$ship_id'"
+      return 1
+    fi
   fi
 
-  [[ -n "$ssh_dest" ]] || return 1
-  echo "$ssh_dest"
+  [[ -n "$db_result" ]] || return 1
+  echo "$db_result"
 }
 
 need_cmd() {
@@ -149,7 +162,10 @@ write_msg_file() {
   local msg_id ts source tmpfile finalfile
   msg_id=$(uuid_gen)
   ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  source=$(_inbox_identity 2>/dev/null || echo "unknown")
+  source=$(_inbox_identity 2>/dev/null)
+  if [[ -z "$source" || "$source" == "null" ]]; then
+    die "Cannot determine identity. Has this node been initialized?"
+  fi
 
   local outdir
   outdir="$(q_outbound)"
@@ -180,23 +196,40 @@ write_msg_file() {
 
 deliver_msg_file() {
   local local_path="$1" dest_ssh="$2" retries="${3:-3}"
-  local filename remote_incoming remote_inbound
+  local filename remote_incoming remote_inbound last_err
   filename=$(basename "$local_path")
   remote_incoming="~/.ohcommodore/ns/$(ns)/q/inbound/.incoming"
   remote_inbound="~/.ohcommodore/ns/$(ns)/q/inbound"
 
   for ((i = 1; i <= retries; i++)); do
-    # SCP to staging, then atomic rename (mkdir -p is idempotent)
-    if scp -q -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-         "$local_path" "${dest_ssh}:${remote_incoming}/${filename}" 2>/dev/null &&
-       ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$dest_ssh" \
-         "mkdir -p $remote_incoming $remote_inbound && mv ${remote_incoming}/${filename} ${remote_inbound}/" 2>/dev/null; then
-      rm -f "$local_path"
-      return 0
+    # Create remote directories first (before SCP)
+    if ! last_err=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$dest_ssh" \
+         "mkdir -p $remote_incoming $remote_inbound" 2>&1); then
+      log "Delivery attempt $i/$retries: mkdir failed: $last_err"
+      sleep "$i"
+      continue
     fi
-    sleep "$i"
+
+    # SCP to staging directory
+    if ! last_err=$(scp -q -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+         "$local_path" "${dest_ssh}:${remote_incoming}/${filename}" 2>&1); then
+      log "Delivery attempt $i/$retries: scp failed: $last_err"
+      sleep "$i"
+      continue
+    fi
+
+    # Atomic rename to final location
+    if ! last_err=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$dest_ssh" \
+         "mv ${remote_incoming}/${filename} ${remote_inbound}/" 2>&1); then
+      log "Delivery attempt $i/$retries: mv failed: $last_err"
+      sleep "$i"
+      continue
+    fi
+
+    rm -f "$local_path"
+    return 0
   done
-  log "ERROR: Failed to deliver message after $retries attempts"
+  log "ERROR: Failed to deliver message after $retries attempts to $dest_ssh"
   return 1
 }
 
@@ -255,11 +288,14 @@ daemon_recover_claimed() {
   # Deadletter old claims (>5 min), retry recent ones
   for f in "$inbound"/.claimed.*.json; do
     [[ -f "$f" ]] || continue
-    local name="${f##*/.claimed.}"
+    local filename="${f##*/.claimed.}"
     if find "$f" -mmin +5 -print -quit | grep -q .; then
-      mv "$f" "$(q_dead)/$name"
+      mv "$f" "$(q_dead)/$filename"
+      echo "Abandoned claim (exceeded 5-minute threshold)" > "$(q_dead)/${filename%.json}.reason"
+      log "Deadlettered abandoned claim: $filename"
     else
-      mv "$f" "$inbound/$name"
+      mv "$f" "$inbound/$filename"
+      log "Recovered claimed file for retry: $filename"
     fi
   done
 }
@@ -454,9 +490,17 @@ nq_check_jobs() {
     local meta_file="${job_file}.meta"
     [[ -f "$meta_file" ]] || continue
 
-    # Read metadata from file (key=value format)
+    # Read metadata from file (key=value format) - safe parsing without eval
     local msg_id artifact_dir started_at msg_source request_id
-    eval "$(sed 's/^source=/msg_source=/' "$meta_file")"
+    while IFS='=' read -r key value; do
+      case "$key" in
+        msg_id) msg_id="$value" ;;
+        artifact_dir) artifact_dir="$value" ;;
+        started_at) started_at="$value" ;;
+        source) msg_source="$value" ;;
+        request_id) request_id="$value" ;;
+      esac
+    done < "$meta_file"
 
     if [[ -z "$msg_id" || -z "$artifact_dir" ]]; then
       log "Warning: Invalid metadata in $meta_file - skipping"
@@ -963,7 +1007,7 @@ cmd_fleet_sink() {
         if [[ -n "$cluster_pubkey_b64" ]]; then
           log "Removing cluster SSH key from exe.dev..."
           local cluster_pubkey
-          cluster_pubkey=$(echo "$cluster_pubkey_b64" | base64 -d)
+          cluster_pubkey=$(echo "$cluster_pubkey_b64" | base64_decode)
           ssh -n exe.dev ssh-key remove "$cluster_pubkey" 2>/dev/null || log "Warning: Could not remove cluster SSH key"
         fi
 

@@ -14,6 +14,11 @@ export DEBIAN_FRONTEND=noninteractive
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
 
+# Portable base64 decode (works on both Linux and macOS)
+base64_decode() {
+  openssl base64 -d -A
+}
+
 sudo_apt_install() {
   # Usage: sudo_apt_install pkg1 pkg2 ...
   sudo apt-get install -y "$@"
@@ -136,8 +141,10 @@ fi
 
 log "Installing nq (job queue utility)..."
 if ! need_cmd nq; then
-  git clone --depth 1 https://github.com/leahneukirchen/nq /tmp/nq
-  cd /tmp/nq && make && sudo make install PREFIX=/usr/local
+  git clone --depth 1 https://github.com/leahneukirchen/nq /tmp/nq || die "Failed to clone nq repository"
+  cd /tmp/nq || die "Failed to cd to nq directory"
+  make || die "Failed to build nq"
+  sudo make install PREFIX=/usr/local || die "Failed to install nq"
   rm -rf /tmp/nq
 else
   log "nq already installed — skipping"
@@ -150,8 +157,8 @@ chmod 700 ~/.ssh
 # Check if pre-generated keys were passed via env vars (base64 encoded)
 if [[ -n "${SHIP_SSH_PRIVKEY_B64:-}" && -n "${SHIP_SSH_PUBKEY_B64:-}" ]]; then
   log "Using pre-generated SSH keys from env vars..."
-  echo "$SHIP_SSH_PRIVKEY_B64" | base64 -d > ~/.ssh/id_ed25519
-  echo "$SHIP_SSH_PUBKEY_B64" | base64 -d > ~/.ssh/id_ed25519.pub
+  echo "$SHIP_SSH_PRIVKEY_B64" | base64_decode > ~/.ssh/id_ed25519
+  echo "$SHIP_SSH_PUBKEY_B64" | base64_decode > ~/.ssh/id_ed25519.pub
   chmod 600 ~/.ssh/id_ed25519
   chmod 644 ~/.ssh/id_ed25519.pub
   log "SSH keys installed from env vars"
