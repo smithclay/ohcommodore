@@ -1365,14 +1365,41 @@ _inbox_send() {
 }
 
 _inbox_read() {
-  [[ $# -ge 1 ]] || die "Usage: ohcommodore inbox read <id>"
-  local msg_id="$1"
-  local escaped_id
-  escaped_id=$(sql_escape "$msg_id")
+  [[ $# -ge 1 ]] || die "Usage: ohcommodore inbox read <message-id-prefix>"
+  local msg_prefix="$1"
 
-  [[ -f "$(msg_db)" ]] || die "Messages DB not initialized"
-  duckdb "$(msg_db)" "UPDATE messages SET handled_at = current_timestamp WHERE message_id = '$escaped_id' AND handled_at IS NULL"
-  duckdb "$(msg_db)" -json "SELECT * FROM messages WHERE message_id = '$escaped_id'"
+  local my_identity maildir
+  my_identity=$(_inbox_identity)
+  [[ -n "$my_identity" ]] || die "Cannot determine identity"
+  maildir=$(maildir_for_identity "$my_identity")
+
+  # Find message by ID prefix in new/ or cur/
+  local found=""
+  for dir in "$maildir/new" "$maildir/cur"; do
+    [[ -d "$dir" ]] || continue
+    for msg in "$dir"/*; do
+      [[ -f "$msg" ]] || continue
+      local msg_id
+      msg_id=$(email_get_header "$msg" "Message-ID")
+      if [[ "$msg_id" == *"$msg_prefix"* ]]; then
+        found="$msg"
+        break 2
+      fi
+    done
+  done
+
+  [[ -n "$found" ]] || die "No message found matching '$msg_prefix'"
+
+  # If in new/, move to cur/ (mark as read)
+  if [[ "$found" == */new/* ]]; then
+    local filename
+    filename=$(basename "$found")
+    mv "$found" "$maildir/cur/${filename}:2,S"
+    found="$maildir/cur/${filename}:2,S"
+  fi
+
+  # Output message content
+  cat "$found"
 }
 
 _inbox_identity() {
