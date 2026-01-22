@@ -1004,10 +1004,10 @@ _fleet_sink_impl() {
       [[ "$confirm" == "sink" ]] || die "Aborted."
     fi
 
-    echo "$ships_data" | while IFS=',' read -r id _repo; do
+    while IFS=',' read -r id _repo; do
       log "Sinking $id..."
       _ship_destroy_impl "$id" >/dev/null
-    done
+    done <<< "$ships_data"
     log "Fleet sunk."
   fi
 
