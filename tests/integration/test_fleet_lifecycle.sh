@@ -78,7 +78,7 @@ main() {
     return 1
   fi
 
-  assert_contains "Ship created" "$ship_output" "Ship ready:"
+  assert_contains "Ship created" "$ship_output" "Created ship:"
 
   # Extract ship name from repo
   local ship_name="${TEST_REPO##*/}"
@@ -91,7 +91,7 @@ main() {
   status_output=$("$PROJECT_ROOT/ohcommodore" fleet status 2>&1)
 
   assert_contains "Shows ship in fleet" "$status_output" "$ship_name"
-  assert_contains "Ship has running status" "$status_output" "running"
+  assert_contains "Ship has ready status" "$status_output" "ready"
 
   # ============================================
   # Test 5: SSH into ship works
@@ -103,7 +103,7 @@ main() {
   ship_dest=$("$PROJECT_ROOT/ohcommodore" fleet status 2>&1 | grep "^  $ship_name-" | awk '{print $3}')
 
   if [[ -n "$ship_dest" ]]; then
-    assert_success "Can SSH to ship" "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 '$ship_dest' 'echo ok'"
+    assert_success "Can SSH to ship" "test_ssh '$ship_dest' 'echo ok'"
   else
     log_fail "Could not determine ship destination"
   fi
@@ -114,7 +114,7 @@ main() {
   log_test "Checking v2 queue initialization on ship..."
 
   local queue_check
-  queue_check=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$ship_dest" 'ls -la ~/.ohcommodore/ns/default/q/ 2>/dev/null' || echo "")
+  queue_check=$(test_ssh "$ship_dest" 'ls -la ~/.ohcommodore/ns/default/q/ 2>/dev/null' || echo "")
 
   assert_contains "Ship has inbound queue" "$queue_check" "inbound"
   assert_contains "Ship has dead queue" "$queue_check" "dead"
@@ -141,15 +141,7 @@ main() {
   status_output=$("$PROJECT_ROOT/ohcommodore" fleet status 2>&1)
 
   # Ship should no longer appear
-  if ! echo "$status_output" | grep -q "$ship_name"; then
-    log_pass "Ship removed from fleet"
-    TESTS_RUN=$((TESTS_RUN + 1))
-    TESTS_PASSED=$((TESTS_PASSED + 1))
-  else
-    log_fail "Ship still appears in fleet"
-    TESTS_RUN=$((TESTS_RUN + 1))
-    TESTS_FAILED=$((TESTS_FAILED + 1))
-  fi
+  assert "Ship removed from fleet" "! echo '$status_output' | grep -q '$ship_name'"
 
   # ============================================
   # Test 9: Scuttle (cleanup happens via trap)

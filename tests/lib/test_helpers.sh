@@ -157,10 +157,13 @@ check_required_env() {
 # Pre-test cleanup - remove any lingering VMs from previous runs
 cleanup_lingering_vms() {
   log_info "Cleaning up any lingering VMs..."
-  ssh exe.dev rm flagship-ohcommodore 2>/dev/null || true
+  # Clean up any flagship VMs (they start with flagship-)
+  for vm in $(ssh exe.dev ls 2>/dev/null | grep -oE 'flagship-[a-zA-Z0-9_-]+' || true); do
+    ssh -n exe.dev rm "$vm" 2>/dev/null || true
+  done
   # Clean up any ship VMs (they start with ship-)
-  for vm in $(ssh exe.dev ls 2>/dev/null | grep "^ship-" || true); do
-    ssh exe.dev rm "$vm" 2>/dev/null || true
+  for vm in $(ssh exe.dev ls 2>/dev/null | grep -oE 'ship-[a-zA-Z0-9_-]+' || true); do
+    ssh -n exe.dev rm "$vm" 2>/dev/null || true
   done
   rm -rf "$HOME/.ohcommodore" 2>/dev/null || true
 }
@@ -223,4 +226,36 @@ wait_for() {
 
   log_fail "Timeout waiting for: $description"
   return 1
+}
+
+# Assert value is not empty (and not an error message)
+assert_not_empty() {
+  local description="$1"
+  local value="$2"
+
+  TESTS_RUN=$((TESTS_RUN + 1))
+
+  if [[ -n "$value" && "$value" != *"No such file"* ]]; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+    log_pass "$description"
+    return 0
+  else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+    log_fail "$description (empty or missing)"
+    return 1
+  fi
+}
+
+# SSH with standard test options
+test_ssh() {
+  local dest="$1"
+  shift
+  ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 "$dest" "$@"
+}
+
+# SSH with quiet options (no host key warnings)
+test_ssh_quiet() {
+  local dest="$1"
+  shift
+  ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o LogLevel=ERROR -o ConnectTimeout=10 "$dest" "$@"
 }

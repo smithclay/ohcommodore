@@ -11,6 +11,8 @@ repos:
           - "SC2088"  # Tilde in quotes is intentional for SSH remote paths
           - "-e"
           - "SC1091"  # Can't follow sourced files (test helpers exist)
+          - "-e"
+          - "SC2016"  # Single quotes in SSH commands are intentional (run on remote)
 
   - repo: https://github.com/scop/pre-commit-shfmt
     rev: v3.10.0-1

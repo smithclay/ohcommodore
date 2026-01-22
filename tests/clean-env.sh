@@ -49,7 +49,7 @@ if [[ -n "$ohcom_keys" ]]; then
   while IFS= read -r key; do
     [[ -n "$key" ]] || continue
     echo "Removing key: ${key:0:50}..."
-    ssh exe.dev ssh-key remove "$key" 2>/dev/null || true
+    ssh -n exe.dev ssh-key remove "$key" 2>/dev/null || true
   done <<< "$ohcom_keys"
   echo -e "${GREEN}Removed ohcommodore SSH keys${NC}"
 else

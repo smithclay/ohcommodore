@@ -14,24 +14,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Load .env from project root if present (existing env vars take precedence)
-if [[ -f "$PROJECT_ROOT/.env" ]]; then
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ "$line" != *=* ]] && continue
-        key="${line%%=*}"
-        [[ -z "$key" ]] && continue
-        [[ -n "${!key+x}" ]] && continue
-        value="${line#*=}"
-        value="${value%\"}"
-        value="${value#\"}"
-        value="${value%\'}"
-        value="${value#\'}"
-        export "$key=$value"
-    done < "$PROJECT_ROOT/.env"
-fi
+# Source test helpers (loads .env and sets PROJECT_ROOT)
+source "$SCRIPT_DIR/lib/test_helpers.sh"
 
 # Colors
 RED='\033[0;31m'
