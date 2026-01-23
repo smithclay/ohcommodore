@@ -21,7 +21,7 @@ Flagship (exe.dev VM, long-running coordinator)
 Ships (exe.dev VMs, multiple per repo with unique IDs)
 ```
 
-**Key design principle**: Minimal external dependencies (bash, ssh, opensmtpd, duckdb). All communication happens over SSH tunnels using email.
+**Key design principle**: Minimal external dependencies (bash, ssh, nats, duckdb). All communication happens over SSH tunnels using NATS pub/sub.
 
 ## File Structure
 
@@ -39,8 +39,8 @@ Ships (exe.dev VMs, multiple per repo with unique IDs)
 ## Commands
 
 ```bash
-# Bootstrap flagship VM (requires GH_TOKEN)
-GH_TOKEN=... ./ohcommodore init
+# Bootstrap flagship VM (requires GH_TOKEN in .env)
+./ohcommodore init
 
 # Fleet management
 ./ohcommodore fleet status
@@ -49,8 +49,8 @@ GH_TOKEN=... ./ohcommodore init
 
 # Ship management (requires GH_TOKEN env var for create)
 # Ships get unique IDs like ohcommodore-a1b2c3 (Docker-like model)
-GH_TOKEN=... ./ohcommodore ship create owner/repo  # Creates ohcommodore-a1b2c3
-GH_TOKEN=... ./ohcommodore ship create owner/repo  # Creates ohcommodore-x7y8z9 (new instance)
+./ohcommodore ship create owner/repo  # Creates ohcommodore-a1b2c3
+./ohcommodore ship create owner/repo  # Creates ohcommodore-x7y8z9 (new instance)
 ./ohcommodore ship ssh ohcommodore-a1              # Prefix matching (must be unique)
 ./ohcommodore ship destroy ohcommodore-a1          # Prefix matching
 ```
@@ -60,21 +60,11 @@ GH_TOKEN=... ./ohcommodore ship create owner/repo  # Creates ohcommodore-x7y8z9 
 Run these commands on a ship (via `ohcommodore ship ssh <ship-id-prefix>`):
 
 ```bash
-# List inbox messages
-ohcommodore inbox list
-ohcommodore inbox list --status done
-
-# Send a command to another ship (use full ship ID)
+# Send a command to a ship (use full ship ID)
 ohcommodore inbox send captain@ohcommodore-d4e5f6 "cargo test"
-
-# Send a command to commodore
-ohcommodore inbox send commodore@flagship-host "echo 'Report from ship'"
 
 # Get this ship's identity
 ohcommodore inbox identity
-
-# Manual message management
-ohcommodore inbox read <id>        # Mark as read and return raw message content
 ```
 
 ## Environment Variables
@@ -98,75 +88,56 @@ When a ship is created, `cloudinit/init.sh` runs and installs:
 - Rust toolchain via rustup
 - Oh My Zsh with zsh as default shell
 - Dotfiles via chezmoi
-- DuckDB CLI and email messaging (autossh tunnel to flagship SMTP)
+- DuckDB CLI and NATS CLI (autossh tunnel to flagship NATS server)
 
-## Email Messaging System
+## NATS Messaging System
 
-The messaging system uses email over SSH tunnels for inter-node communication.
+The messaging system uses NATS pub/sub over SSH tunnels for inter-node communication.
 
 ### Architecture
 
-- **Flagship**: Runs OpenSMTPD on localhost:25, delivers to per-identity Maildirs
-- **Ships**: SSH tunnel to flagship:25 via autossh, send mail via msmtp (sendmail-compatible)
-- **Storage**: Standard Maildir format (`~/Maildir/<domain>/{new,cur,tmp}`) where `<domain>` is extracted from the identity (e.g., `captain@ohcommodore-abc123` → `~/Maildir/ohcommodore-abc123/`)
+- **Flagship**: Runs nats-server on localhost:4222
+- **Ships**: SSH tunnel to flagship:4222 via autossh, communicate via nats CLI
 
-### Message Format
-
-Messages are standard RFC 5322 emails with custom `X-Ohcom-*` headers:
+### Subject Schema
 
 ```
-From: commodore@flagship
-To: captain@ohcommodore-abc123
-Subject: cmd.exec
-Message-ID: <uuid@flagship>
-Date: Mon, 20 Jan 2026 19:12:03 +0000
-X-Ohcom-Topic: cmd.exec
-X-Ohcom-Request-ID: req-123
-
-cd ~/myrepo && cargo test
+ohcom.cmd.<ship-id>         # Commands to ship (captain@<ship-id>)
+ohcom.cmd.commodore         # Commands to flagship (commodore@flagship)
+ohcom.broadcast             # Commands to all ships (future)
 ```
 
-Result messages include an exit code header:
+### Message Format (JSON)
 
+Request message:
+```json
+{"cmd": "cargo test", "request_id": "uuid"}
 ```
-X-Ohcom-Topic: cmd.result
-X-Ohcom-Request-ID: req-123
-X-Ohcom-Exit-Code: 0
-```
 
-### Protocol Topics
-
-| Topic | Direction | Purpose |
-|-------|-----------|---------|
-| `cmd.exec` | → ship | Execute a command |
-| `cmd.result` | ← ship | Return execution result |
+Results are stored locally in artifact directories (`~/.ohcommodore/ns/default/artifacts/<request-id>/`).
 
 ### Debugging
 
 ```bash
-# See pending messages (on flagship)
-ls ~/Maildir/*/new/
-
-# Check OpenSMTPD status (on flagship)
-systemctl status opensmtpd
-smtpctl show queue
+# Check nats-server status (on flagship)
+systemctl status nats-server
 
 # Check autossh tunnel status (on ships)
 systemctl status ohcom-tunnel
 
-# Read message history with mutt
-mutt -f ~/Maildir/commodore/
+# Publish a test message
+nats pub ohcom.cmd.test '{"cmd":"echo hello","request_id":"test-123"}'
 
-# Watch for new mail
-watch -n1 'ls ~/Maildir/*/new/'
+# Subscribe to messages (debugging)
+nats sub "ohcom.cmd.>"
 ```
 
 ### Security
 
-The email messaging system executes commands from `cmd.exec` messages without sanitization. This is by design for trusted internal use. Security relies on:
+The NATS messaging system executes commands from messages without sanitization. This is by design for trusted internal use. Security relies on:
 
-1. **SSH tunnel isolation**: Ships connect to flagship SMTP only via authenticated SSH tunnels
-2. **localhost-only SMTP**: OpenSMTPD on flagship listens only on localhost (127.0.0.1)
+1. **SSH tunnel isolation**: Ships connect to flagship NATS only via authenticated SSH tunnels
+2. **localhost-only NATS**: nats-server on flagship listens only on localhost (127.0.0.1)
 3. **Network isolation**: exe.dev VMs are not publicly accessible
 
-**Do not expose the messaging system to untrusted sources.** Any entity that can send mail to the flagship can execute arbitrary commands on ships.
+**Do not expose the messaging system to untrusted sources.** Any entity that can publish to the NATS server can execute arbitrary commands on ships.

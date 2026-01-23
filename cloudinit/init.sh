@@ -139,52 +139,45 @@ else
 fi
 
 # ──────────────────────────────────────────────────────────
-# Email infrastructure (commodore only)
+# NATS infrastructure (commodore only)
 # ──────────────────────────────────────────────────────────
 
 if [[ "${ROLE:-}" == "commodore" ]]; then
-  log "Installing OpenSMTPD..."
-  if ! need_cmd smtpd; then
-    sudo apt-get update -qq
-    sudo apt-get install -y opensmtpd
+  log "Installing nats-server..."
+  if ! need_cmd nats-server; then
+    curl -fsSL https://github.com/nats-io/nats-server/releases/download/v2.12.3/nats-server-v2.12.3-linux-amd64.tar.gz | tar xz -C /tmp
+    sudo mv /tmp/nats-server-*/nats-server /usr/local/bin/
+    sudo chmod +x /usr/local/bin/nats-server
+    rm -rf /tmp/nats-server-*
   fi
 
-  log "Configuring OpenSMTPD for local Maildir delivery..."
+  log "Installing nats CLI..."
+  if ! need_cmd nats; then
+    curl -fsSL -o /tmp/nats-cli.zip https://github.com/nats-io/natscli/releases/download/v0.3.0/nats-0.3.0-linux-amd64.zip
+    unzip -o /tmp/nats-cli.zip -d /tmp
+    sudo mv /tmp/nats-0.3.0-linux-amd64/nats /usr/local/bin/
+    sudo chmod +x /usr/local/bin/nats
+    rm -rf /tmp/nats-cli.zip /tmp/nats-*
+  fi
 
-  # Create mail config directory
-  sudo mkdir -p /etc/mail
+  log "Creating nats-server systemd service..."
+  sudo tee /etc/systemd/system/nats-server.service > /dev/null << 'NATS_SERVICE'
+[Unit]
+Description=NATS Server
+After=network.target
 
-  # Domain table - accept any domain (ships have dynamic domains)
-  echo "*" | sudo tee /etc/mail/domains > /dev/null
+[Service]
+ExecStart=/usr/local/bin/nats-server -a 127.0.0.1 -p 4222
+Restart=always
+RestartSec=5
 
-  # Virtual users table - map any user to exedev
-  echo "@: exedev" | sudo tee /etc/mail/virtuals > /dev/null
+[Install]
+WantedBy=multi-user.target
+NATS_SERVICE
 
-  sudo tee /etc/smtpd.conf > /dev/null << 'SMTPD_CONF'
-# ohcommodore mail configuration
-# Listen only on localhost (ships tunnel in via SSH)
-listen on lo
-
-# Accept any domain (ship domains are dynamic)
-table domains file:/etc/mail/domains
-
-# Map any user at any domain to local exedev user
-table virtuals file:/etc/mail/virtuals
-
-# Deliver to Maildir organized by recipient domain
-# Identity format: role@ship-id (e.g., captain@ohcommodore-abc123)
-# Maildir path: ~/Maildir/ship-id/
-action "deliver" maildir "/home/exedev/Maildir/%{dest.domain}" virtual <virtuals>
-
-# Accept all mail from local for any domain
-match from local for domain <domains> action "deliver"
-SMTPD_CONF
-
-  log "Creating base Maildir structure..."
-  mkdir -p ~/Maildir/commodore/{new,cur,tmp}
-
-  log "Starting OpenSMTPD..."
-  sudo systemctl enable --now opensmtpd
+  log "Starting nats-server..."
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now nats-server
 fi
 
 log "Setting up SSH keys..."
@@ -233,50 +226,34 @@ SSHCONFIG
 fi
 
 # ──────────────────────────────────────────────────────────
-# Email infrastructure (captain/ships only)
+# NATS infrastructure (captain/ships only)
 # ──────────────────────────────────────────────────────────
 
 if [[ "${ROLE:-}" == "captain" && -n "${FLAGSHIP_SSH_DEST:-}" ]]; then
-  log "Installing autossh and msmtp for SMTP tunnel..."
-  if ! need_cmd autossh || ! need_cmd msmtp; then
+  log "Installing autossh for NATS tunnel..."
+  if ! need_cmd autossh; then
     sudo apt-get update -qq
-    sudo apt-get install -y autossh msmtp msmtp-mta
+    sudo apt-get install -y autossh
   fi
 
-  log "Adding flagship to /etc/hosts..."
-  if ! grep -q '^127\.0\.0\.1.*flagship' /etc/hosts; then
-    echo "127.0.0.1 flagship" | sudo tee -a /etc/hosts > /dev/null
+  log "Installing nats CLI..."
+  if ! need_cmd nats; then
+    curl -fsSL -o /tmp/nats-cli.zip https://github.com/nats-io/natscli/releases/download/v0.3.0/nats-0.3.0-linux-amd64.zip
+    unzip -o /tmp/nats-cli.zip -d /tmp
+    sudo mv /tmp/nats-0.3.0-linux-amd64/nats /usr/local/bin/
+    sudo chmod +x /usr/local/bin/nats
+    rm -rf /tmp/nats-cli.zip /tmp/nats-*
   fi
 
-  log "Configuring msmtp for local SMTP relay..."
-  cat > ~/.msmtprc << 'MSMTP_CONF'
-# msmtp config for ohcommodore ships
-# Sends mail via local SMTP tunnel (autossh -> flagship:25)
-defaults
-auth off
-tls off
-
-account flagship
-host 127.0.0.1
-port 25
-from exedev@localhost
-
-account default : flagship
-MSMTP_CONF
-  chmod 600 ~/.msmtprc
-
-  log "Creating Maildir for ship identity..."
-  mkdir -p ~/Maildir/"${SHIP_ID:-captain}"/{new,cur,tmp}
-
-  log "Creating autossh tunnel service..."
+  log "Creating autossh tunnel service for NATS..."
   sudo tee /etc/systemd/system/ohcom-tunnel.service > /dev/null << TUNNEL_EOF
 [Unit]
-Description=ohcommodore SMTP tunnel to flagship
+Description=ohcommodore NATS tunnel to flagship
 After=network.target
 
 [Service]
 User=exedev
-ExecStart=/usr/bin/autossh -M 0 -N -o "ServerAliveInterval 30" -o "ServerAliveCountMax 3" -L 25:localhost:25 ${FLAGSHIP_SSH_DEST}
+ExecStart=/usr/bin/autossh -M 0 -N -o "ServerAliveInterval 30" -o "ServerAliveCountMax 3" -L 4222:localhost:4222 ${FLAGSHIP_SSH_DEST}
 Restart=always
 RestartSec=10
 
@@ -284,7 +261,7 @@ RestartSec=10
 WantedBy=multi-user.target
 TUNNEL_EOF
 
-  log "Starting SMTP tunnel..."
+  log "Starting NATS tunnel..."
   sudo systemctl daemon-reload
   sudo systemctl enable --now ohcom-tunnel
 fi

@@ -57,7 +57,7 @@ Prefix matching works: `ohcommodore ship ssh api-a1` matches `api-a1b2c3` (must 
 
 Format: `<role>@<target>`
 - `captain@<ship-id>` - send to a ship (e.g., `captain@api-a1b2c3`)
-- `commodore@<flagship-hostname>` - send to flagship
+- `commodore@flagship` - send to flagship
 
 ## Workflow
 

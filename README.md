@@ -128,7 +128,7 @@ ohcommodore inbox list --status done
 ohcommodore inbox send captain@other-ship "cargo test"
 
 # Send a command to commodore
-ohcommodore inbox send commodore@flagship-host "echo 'Report from ship'"
+ohcommodore inbox send commodore@flagship "echo 'Report from ship'"
 
 # Get this ship's identity
 ohcommodore inbox identity

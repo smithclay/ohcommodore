@@ -36,136 +36,20 @@ shell_quote() {
   printf '%q' "$1"
 }
 
-# Maildir helpers
-maildir_root() { echo "$HOME/Maildir"; }
-
-maildir_for_identity() {
-  local identity="$1"
-  # Extract domain part from identity (e.g., "captain@ship-abc123" -> "ship-abc123")
-  local domain_part="${identity#*@}"
-  echo "$(maildir_root)/$domain_part"
+# NATS helpers
+nats_pub() {
+  local subject="$1" data="$2"
+  nats pub "$subject" "$data" 2>/dev/null
 }
 
-ensure_maildir() {
-  local maildir="$1"
-  mkdir -p "$maildir"/{new,cur,tmp}
+nats_req() {
+  local subject="$1" data="$2" timeout="${3:-300s}"
+  nats req "$subject" "$data" --timeout "$timeout" --raw 2>/dev/null
 }
 
-# Remote Maildir helpers (for ships accessing flagship's Maildir)
-# Returns 0 if current role requires remote Maildir access
-maildir_is_remote() {
-  local role
-  role=$(get_role)
-  [[ "$role" == "captain" ]]
-}
-
-# List new message files in Maildir
-# Returns list of paths (relative to home on flagship for remote)
-# Returns empty on no messages; exits non-zero on SSH/access failure
-maildir_list_new() {
-  local maildir="$1"
-  local q_maildir
-  q_maildir=$(shell_quote "$maildir")
-
-  if maildir_is_remote; then
-    # Use exit code to distinguish "no files" (0) from "error" (non-zero)
-    flagship_ssh "ls $q_maildir/new/* 2>/dev/null; exit 0" || {
-      log "Warning: Failed to list remote Maildir $maildir"
-      return 0  # Return empty rather than failing scheduler loop
-    }
-  else
-    ls "$maildir/new/"* 2>/dev/null || true
-  fi
-}
-
-# Claim a message (move from new/ to cur/)
-# For remote: atomically moves and outputs content in one SSH call
-# Returns path to local claimed message, or empty on failure
-maildir_claim() {
-  local msg_path="$1" maildir="$2"
-  local filename claimed_name
-  filename=$(basename "$msg_path")
-  claimed_name="${filename}:2,S"
-
-  if maildir_is_remote; then
-    local q_msg q_maildir q_claimed
-    q_msg=$(shell_quote "$msg_path")
-    q_maildir=$(shell_quote "$maildir")
-    q_claimed=$(shell_quote "$claimed_name")
-
-    # Atomic: move and cat in single SSH to avoid race conditions
-    ensure_maildir "$maildir"
-    if ! flagship_ssh "mv $q_msg $q_maildir/cur/$q_claimed && cat $q_maildir/cur/$q_claimed" \
-         > "$maildir/cur/$claimed_name" 2>/dev/null; then
-      log "Warning: Failed to claim message $msg_path"
-      rm -f "$maildir/cur/$claimed_name" 2>/dev/null
-      return 1
-    fi
-    echo "$maildir/cur/$claimed_name"
-  else
-    if ! mv "$msg_path" "$maildir/cur/$claimed_name" 2>/dev/null; then
-      log "Warning: Failed to claim local message $msg_path"
-      return 1
-    fi
-    echo "$maildir/cur/$claimed_name"
-  fi
-}
-
-# Email composition and sending
-# Returns message ID on success, exits non-zero on failure
-send_email() {
-  local from="$1" to="$2" subject="$3" body="$4"
-  shift 4
-  # Remaining args are extra headers (key: value format)
-
-  local msg_id date_header
-  msg_id="<$(uuid_gen)@${from#*@}>"
-  date_header=$(date -R)
-
-  if ! {
-    echo "From: $from"
-    echo "To: $to"
-    echo "Subject: $subject"
-    echo "Message-ID: $msg_id"
-    echo "Date: $date_header"
-    # Add extra headers
-    for header in "$@"; do
-      echo "$header"
-    done
-    echo ""
-    echo "$body"
-  } | sendmail -t; then
-    log "Warning: sendmail failed for message to $to"
-    return 1
-  fi
-
-  echo "$msg_id"
-}
-
-send_reply() {
-  local orig_msg="$1" from="$2" subject="$3" body="$4"
-  shift 4
-
-  local orig_msgid orig_from
-  orig_msgid=$(grep -i '^Message-ID:' "$orig_msg" | head -1 | sed 's/^[^:]*: *//')
-  orig_from=$(grep -i '^From:' "$orig_msg" | head -1 | sed 's/^[^:]*: *//')
-
-  send_email "$from" "$orig_from" "$subject" "$body" \
-    "In-Reply-To: $orig_msgid" \
-    "References: $orig_msgid" \
-    "$@"
-}
-
-# Parse email message
-email_get_header() {
-  local msg="$1" header="$2"
-  grep -i "^${header}:" "$msg" | head -1 | sed 's/^[^:]*: *//'
-}
-
-email_get_body() {
-  local msg="$1"
-  # Body starts after first blank line
-  sed -n '/^$/,$p' "$msg" | tail -n +2
+nats_sub() {
+  local subject="$1"
+  nats sub "$subject" --raw
 }
 
 # Portable base64 decode (works on both Linux and macOS)
@@ -742,12 +626,8 @@ _fleet_sink_direct() {
 
 init_common() {
   local identity="$1"
-  local db maildir
+  local db
   db="$(msg_db)"
-  maildir=$(maildir_for_identity "$identity")
-
-  # Create Maildir structure
-  ensure_maildir "$maildir"
 
   # Initialize config database
   init_messages_db
@@ -756,8 +636,6 @@ init_common() {
   escaped_identity=$(sql_escape "$identity")
 
   duckdb "$db" "
-    INSERT INTO config (key, value) VALUES ('POLL_INTERVAL_SEC', '10')
-      ON CONFLICT (key) DO NOTHING;
     INSERT INTO config (key, value) VALUES ('IDENTITY', '$escaped_identity')
       ON CONFLICT (key) DO NOTHING;
   "
@@ -774,7 +652,7 @@ cmd__init_commodore() {
   local flagship_hostname
   flagship_hostname=$(hostname -f 2>/dev/null || hostname)
 
-  # Create common config and email messaging state
+  # Create common config
   init_common "commodore@$flagship_hostname"
 
   # Create ships table (commodore-only)
@@ -816,7 +694,7 @@ cmd__init_captain() {
     ship_identity="captain@$(hostname -f 2>/dev/null || hostname)"
   fi
 
-  # Create common config and email messaging state
+  # Create common config
   init_common "$ship_identity"
 
   log "Captain initialized${repo:+ for $repo}."
@@ -829,75 +707,10 @@ cmd_inbox() {
   shift || true
 
   case "$subcmd" in
-    list) _inbox_list "$@" ;;
     send) _inbox_send "$@" ;;
-    read) _inbox_read "$@" ;;
     identity) _inbox_identity ;;
-    *) die "Usage: ohcommodore inbox [list|send|read|identity]" ;;
+    *) die "Usage: ohcommodore inbox [send|identity]" ;;
   esac
-}
-
-_inbox_list() {
-  local status_filter="all" for_identity=""
-
-  # Parse arguments
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --status) status_filter="${2:-}"; shift 2 ;;
-      --for-identity) for_identity="${2:-}"; shift 2 ;;  # Internal: used for delegation
-      *) shift ;;
-    esac
-  done
-
-  # Validate status_filter
-  case "$status_filter" in
-    all|done|handled|unread|pending) ;;
-    *) die "Invalid status filter: $status_filter" ;;
-  esac
-
-  # Ships delegate to flagship (where Maildir lives)
-  if maildir_is_remote; then
-    local my_identity args=""
-    my_identity=$(_inbox_identity)
-    [[ "$status_filter" != "all" ]] && args="--status $(shell_quote "$status_filter")"
-    args="$args --for-identity $(shell_quote "$my_identity")"
-    flagship_ssh "~/.local/bin/ohcommodore inbox list $args"
-    return
-  fi
-
-  # Local: use for_identity if provided (delegation), otherwise own identity
-  local my_identity maildir
-  my_identity="${for_identity:-$(_inbox_identity)}"
-  [[ -n "$my_identity" ]] || die "Cannot determine identity"
-  maildir=$(maildir_for_identity "$my_identity")
-
-  {
-    echo "STATUS	ID	FROM	TOPIC	DATE"
-    local dir status
-    for dir in "$maildir/new" "$maildir/cur"; do
-      [[ -d "$dir" ]] || continue
-
-      if [[ "$dir" == */new ]]; then
-        status="unread"
-        [[ "$status_filter" == "done" || "$status_filter" == "handled" ]] && continue
-      else
-        status="done"
-        [[ "$status_filter" == "unread" || "$status_filter" == "pending" ]] && continue
-      fi
-
-      for msg in "$dir"/*; do
-        [[ -f "$msg" ]] || continue
-
-        local msg_id from topic date_hdr
-        msg_id=$(email_get_header "$msg" "Message-ID" | tr -d '<>' | cut -c1-38)
-        from=$(email_get_header "$msg" "From" | cut -c1-25)
-        topic=$(email_get_header "$msg" "X-Ohcom-Topic")
-        date_hdr=$(email_get_header "$msg" "Date" | cut -c1-20)
-
-        echo "$status	$msg_id	$from	$topic	$date_hdr"
-      done
-    done
-  } | column -t -s $'\t'
 }
 
 _inbox_send() {
@@ -905,81 +718,22 @@ _inbox_send() {
   local recipient="$1"
   local command="$2"
 
-  if ! echo "$recipient" | grep -qE '^(captain|commodore)@.+$'; then
-    die "Invalid recipient format. Use captain@<ship-id> or commodore@<hostname>"
+  local subject request_id payload
+
+  if echo "$recipient" | grep -qE '^captain@.+$'; then
+    subject="ohcom.cmd.${recipient#captain@}"
+  elif [[ "$recipient" == "commodore@flagship" ]]; then
+    subject="ohcom.cmd.commodore"
+  else
+    die "Invalid recipient format. Use captain@<ship-id> or commodore@flagship"
   fi
 
-  local my_identity request_id
-  my_identity=$(_inbox_identity)
-  [[ -n "$my_identity" ]] || die "Cannot determine identity"
   request_id=$(uuid_gen)
+  payload=$(jq -nc --arg cmd "$command" --arg req "$request_id" \
+    '{cmd: $cmd, request_id: $req}')
 
-  local msg_id
-  msg_id=$(send_email \
-    "$my_identity" \
-    "$recipient" \
-    "cmd.exec" \
-    "$command" \
-    "X-Ohcom-Topic: cmd.exec" \
-    "X-Ohcom-Request-ID: $request_id")
-
+  nats_pub "$subject" "$payload"
   echo "Message sent: $request_id -> $recipient"
-}
-
-_inbox_read() {
-  local msg_prefix="" for_identity=""
-
-  # Parse arguments
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --for-identity) for_identity="${2:-}"; shift 2 ;;  # Internal: used for delegation
-      *) msg_prefix="$1"; shift ;;
-    esac
-  done
-
-  [[ -n "$msg_prefix" ]] || die "Usage: ohcommodore inbox read <message-id-prefix>"
-
-  # Ships delegate to flagship (where Maildir lives)
-  if maildir_is_remote; then
-    local my_identity
-    my_identity=$(_inbox_identity)
-    flagship_ssh "~/.local/bin/ohcommodore inbox read $(shell_quote "$msg_prefix") --for-identity $(shell_quote "$my_identity")"
-    return
-  fi
-
-  # Local: use for_identity if provided (delegation), otherwise own identity
-  local my_identity maildir
-  my_identity="${for_identity:-$(_inbox_identity)}"
-  [[ -n "$my_identity" ]] || die "Cannot determine identity"
-  maildir=$(maildir_for_identity "$my_identity")
-
-  # Find message matching prefix
-  local found=""
-  for dir in "$maildir/new" "$maildir/cur"; do
-    [[ -d "$dir" ]] || continue
-    for msg in "$dir"/*; do
-      [[ -f "$msg" ]] || continue
-      local msg_id
-      msg_id=$(email_get_header "$msg" "Message-ID")
-      if [[ "$msg_id" == *"$msg_prefix"* ]]; then
-        found="$msg"
-        break 2
-      fi
-    done
-  done
-
-  [[ -n "$found" ]] || die "No message found matching '$msg_prefix'"
-
-  # If in new/, move to cur/ (mark as read)
-  if [[ "$found" == */new/* ]]; then
-    local filename
-    filename=$(basename "$found")
-    mv "$found" "$maildir/cur/${filename}:2,S"
-    found="$maildir/cur/${filename}:2,S"
-  fi
-
-  # Output message content
-  cat "$found"
 }
 
 _inbox_identity() {
@@ -1000,76 +754,44 @@ _inbox_identity() {
 cmd__scheduler() {
   require_role commodore captain
 
-  local my_identity maildir poll_interval is_remote
+  local my_identity my_role subject
   my_identity=$(_inbox_identity)
   [[ -n "$my_identity" ]] || die "No identity configured"
-  maildir=$(maildir_for_identity "$my_identity")
-  ensure_maildir "$maildir"
 
-  is_remote="no"
-  maildir_is_remote && is_remote="yes"
-
-  poll_interval=$(duckdb "$(msg_db)" -noheader -csv "SELECT value FROM config WHERE key = 'POLL_INTERVAL_SEC'" 2>/dev/null || echo "10")
+  # Determine subscription subject based on role
+  my_role="${my_identity%%@*}"
+  if [[ "$my_role" == "commodore" ]]; then
+    subject="ohcom.cmd.commodore"
+  else
+    # Extract ship ID from identity (e.g., "captain@ship-abc123" -> "ship-abc123")
+    subject="ohcom.cmd.${my_identity#*@}"
+  fi
 
   trap 'log "Scheduler shutting down"; exit 0' SIGTERM SIGINT
 
-  log "Email scheduler starting for $my_identity (poll: ${poll_interval}s, maildir: $maildir, remote: $is_remote)"
+  log "NATS scheduler starting for $my_identity (subject: $subject)"
 
-  while true; do
-    # Process new mail (uses remote helpers if captain)
-    local new_files
-    new_files=$(maildir_list_new "$maildir")
+  # Subscribe to NATS subject and process messages
+  nats_sub "$subject" | while IFS= read -r msg; do
+    [[ -n "$msg" ]] || continue
 
-    while IFS= read -r msg; do
-      # Skip empty lines and error messages from ls
-      [[ -n "$msg" ]] || continue
-      [[ "$msg" != *"No such file"* && "$msg" != *"cannot access"* ]] || continue
+    local cmd request_id
+    cmd=$(echo "$msg" | jq -r '.cmd // empty')
+    request_id=$(echo "$msg" | jq -r '.request_id // empty')
 
-      local topic claimed_msg
-      # Claim message (moves to cur/, copies locally if remote)
-      if ! claimed_msg=$(maildir_claim "$msg" "$maildir"); then
-        log "Failed to claim message: $msg"
-        continue
-      fi
-      [[ -f "$claimed_msg" ]] || continue
+    [[ -n "$cmd" ]] || { log "Empty or invalid command in message, skipping"; continue; }
 
-      topic=$(email_get_header "$claimed_msg" "X-Ohcom-Topic")
-
-      case "$topic" in
-        cmd.exec)
-          _scheduler_handle_cmd_exec "$claimed_msg"
-          ;;
-        cmd.result)
-          _scheduler_handle_cmd_result "$claimed_msg"
-          ;;
-        "")
-          log "Missing X-Ohcom-Topic header in message, skipping: $claimed_msg"
-          ;;
-        *)
-          log "Unknown topic '$topic' in message, skipping: $claimed_msg"
-          ;;
-      esac
-    done <<< "$new_files"
-
-    sleep "$poll_interval"
+    _scheduler_handle_cmd_exec "$cmd" "$request_id"
   done
 }
 
 _scheduler_handle_cmd_exec() {
-  local msg="$1"
-
-  local cmd request_id source started_at ended_at exit_code
-  cmd=$(email_get_body "$msg")
-  request_id=$(email_get_header "$msg" "X-Ohcom-Request-ID")
-  source=$(email_get_header "$msg" "From")
-
-  [[ -n "$cmd" ]] || { log "Empty command in message, skipping"; return; }
+  local cmd="$1" request_id="$2"
 
   log "Executing: $cmd"
-  started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
   # Create artifact directory for output
-  local artifact_dir
+  local artifact_dir exit_code
   artifact_dir="$(artifacts_root)/${request_id:-$(uuid_gen)}"
   mkdir -p "$artifact_dir"
 
@@ -1079,48 +801,7 @@ _scheduler_handle_cmd_exec() {
   exit_code=$?
   set -e
 
-  ended_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-  log "Command finished: exit=$exit_code"
-
-  # Send result back to source
-  if [[ -n "$source" ]]; then
-    local my_identity hostname body
-    my_identity=$(_inbox_identity)
-    hostname=$(hostname -f 2>/dev/null || hostname)
-
-    body=$(cat << RESULT_EOF
-Exit code: $exit_code
-Started: $started_at
-Ended: $ended_at
-
---stdout--
-${hostname}:${artifact_dir}/stdout.txt
-
---stderr--
-${hostname}:${artifact_dir}/stderr.txt
-RESULT_EOF
-)
-
-    send_reply "$msg" "$my_identity" "Re: cmd.exec" "$body" \
-      "X-Ohcom-Topic: cmd.result" \
-      "X-Ohcom-Request-ID: ${request_id:-unknown}" \
-      "X-Ohcom-Exit-Code: $exit_code"
-
-    log "Result sent to $source"
-  fi
-}
-
-_scheduler_handle_cmd_result() {
-  local msg="$1"
-
-  local request_id exit_code from
-  request_id=$(email_get_header "$msg" "X-Ohcom-Request-ID")
-  exit_code=$(email_get_header "$msg" "X-Ohcom-Exit-Code")
-  from=$(email_get_header "$msg" "From")
-
-  log "Received result: request=$request_id exit=$exit_code from=$from"
-  # Results are stored in Maildir for later inspection
+  log "Command finished: exit=$exit_code, artifacts: $artifact_dir"
 }
 
 show_help() {
@@ -1135,9 +816,7 @@ USAGE:
   ohcommodore ship create <owner/repo|name> Create ship (repo or empty)
   ohcommodore ship destroy <name>          Destroy a ship
   ohcommodore ship ssh <name>              SSH into a ship
-  ohcommodore inbox list [--status <s>]    List inbox messages
-  ohcommodore inbox send <rcpt> <cmd>      Send command to recipient
-  ohcommodore inbox read <id>              Read and mark handled
+  ohcommodore inbox send <rcpt> <cmd>      Send command (captain@<ship-id> or commodore@flagship)
   ohcommodore inbox identity               Show this node's identity
 
 HELP
