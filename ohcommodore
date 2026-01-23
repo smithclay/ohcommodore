@@ -17,14 +17,9 @@ CONFIG_FILE="$CONFIG_DIR/config.json"
 log() { printf '==> %s\n' "$*" >&2; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-sql_escape() {
-  printf '%s' "$1" | sed "s/'/''/g"
-}
-
-sql_like_escape() {
-  local escaped
-  escaped=$(sql_escape "$1")
-  printf '%s' "$escaped" | sed -e 's/\\/\\\\/g' -e 's/%/\\%/g' -e 's/_/\\_/g'
+# Get live VM state from exe.dev
+exe_dev_ls() {
+  ssh exe.dev ls -json 2>/dev/null | jq -c '.vms // []'
 }
 
 uuid_gen() {
@@ -64,53 +59,35 @@ generate_ship_id() {
   echo "${repo_name}-${suffix}"
 }
 
+# Resolve ship prefix to full ship ID using exe.dev ls
 resolve_ship_prefix() {
   local prefix="$1"
-  local escaped_prefix
-  escaped_prefix=$(sql_like_escape "$prefix")
+  local vms matches
 
-  local -a matches=()
-  local match_line
-  if ! while IFS= read -r match_line; do
-    matches+=("$match_line")
-  done < <(duckdb "$(msg_db)" -csv -noheader "SELECT id FROM ships WHERE id LIKE '${escaped_prefix}%' ESCAPE '\\'" 2>&1); then
-    die "Database error looking up ship: ${matches[*]}"
-  fi
+  vms=$(exe_dev_ls)
+  # Extract ship IDs from vm_names like "ship-ohcommodore-abc123" -> "ohcommodore-abc123"
+  matches=$(echo "$vms" | jq -r --arg prefix "$prefix" '
+    .[] | select(.vm_name | startswith("ship-")) |
+    .vm_name | ltrimstr("ship-") |
+    select(startswith($prefix))
+  ')
 
   local count
-  count=${#matches[@]}
+  count=$(echo "$matches" | grep -c . || echo 0)
 
   case "$count" in
     0) die "No ship matches '$prefix'" ;;
-    1) echo "${matches[0]}" ;;
-    *) die "Multiple ships match '$prefix': ${matches[*]}" ;;
+    1) echo "$matches" ;;
+    *) die "Multiple ships match '$prefix': $(echo "$matches" | tr '\n' ' ')" ;;
   esac
 }
 
+# Get ssh_dest for a ship ID from exe.dev ls
 lookup_ship_ssh_dest() {
   local ship_id="$1"
-  local escaped_id
-  escaped_id=$(sql_escape "$ship_id")
-  local query="SELECT ssh_dest FROM ships WHERE id = '$escaped_id'"
+  local vm_name="ship-${ship_id}"
 
-  local role db_result
-  role=$(get_role)
-  if [[ "$role" == "commodore" ]]; then
-    if ! db_result=$(duckdb "$(msg_db)" -noheader -csv "$query" 2>&1); then
-      log "ERROR: Database query failed: $db_result"
-      return 1
-    fi
-  else
-    need_flagship
-    # Suppress stderr to avoid SSH warnings corrupting result; failures detected via exit code
-    if ! db_result=$(flagship_ssh "duckdb ~/.ohcommodore/ns/${OHCOM_NS:-default}/data.duckdb -noheader -csv \"${query}\"" 2>/dev/null); then
-      log "ERROR: Flagship database query failed for ship '$ship_id'"
-      return 1
-    fi
-  fi
-
-  [[ -n "$db_result" ]] || return 1
-  echo "$db_result"
+  exe_dev_ls | jq -r --arg vm "$vm_name" '.[] | select(.vm_name == $vm) | .ssh_dest'
 }
 
 need_cmd() {
@@ -120,22 +97,17 @@ need_cmd() {
 # Namespace helpers
 ns() { echo "${OHCOM_NS:-default}"; }
 ns_root() { echo "$HOME/.ohcommodore/ns/$(ns)"; }
-msg_db() { echo "$(ns_root)/data.duckdb"; }
+ships_json() { echo "$(ns_root)/ships.json"; }
 artifacts_root() { echo "$(ns_root)/artifacts"; }
 
 # Default command timeout: 5 minutes
 CMD_TIMEOUT_S="${CMD_TIMEOUT_S:-300}"
 
-init_messages_db() {
-  local db
-  db="$(msg_db)"
-  mkdir -p "$(dirname "$db")"
-  duckdb "$db" "
-    CREATE TABLE IF NOT EXISTS config (
-      key TEXT PRIMARY KEY,
-      value TEXT
-    );
-  "
+init_ships_registry() {
+  local file
+  file="$(ships_json)"
+  mkdir -p "$(dirname "$file")"
+  [[ -f "$file" ]] || echo '{}' > "$file"
 }
 
 need_flagship() {
@@ -372,21 +344,29 @@ _fleet_status_impl() {
   echo "FLAGSHIP: $(hostname -f 2>/dev/null || hostname)"
   echo ""
 
+  local vms registry
+  vms=$(exe_dev_ls)
+  registry=$(cat "$(ships_json)" 2>/dev/null || echo '{}')
+
+  # Merge exe.dev ls (live state) with ships.json (repo info)
   local ships_data
-  ships_data=$(duckdb "$(msg_db)" -noheader -csv "SELECT id, repo, ssh_dest, status FROM ships ORDER BY created_at" 2>/dev/null || echo "")
+  ships_data=$(echo "$vms" | jq -r --argjson reg "$registry" '
+    .[] | select(.vm_name | startswith("ship-")) |
+    (.vm_name | ltrimstr("ship-")) as $id |
+    [$id, ($reg[$id].repo // "-"), .ssh_dest, .status]
+    | @tsv
+  ' 2>/dev/null | sort)
 
   if [[ -z "$ships_data" ]]; then
     echo "SHIPS: (none)"
   else
     local ship_count
-    ship_count=$(echo "$ships_data" | wc -l | tr -d ' ')
+    ship_count=$(echo "$ships_data" | grep -c . || echo 0)
 
     echo "SHIPS ($ship_count):"
     {
       echo "SHIP	REPO	SSH_DEST	STATUS"
-      echo "$ships_data" | while IFS=',' read -r id repo ssh_dest status; do
-        echo "$id	$repo	$ssh_dest	$status"
-      done
+      echo "$ships_data"
     } | column -t -s $'\t' | sed 's/^/  /'
   fi
 }
@@ -420,21 +400,13 @@ cmd_ship_create() {
   esac
 }
 
-# Database helpers for ship management
+# Ship registry helpers (JSON-based)
 _register_ship() {
-  local ship_id="$1" repo="$2" ssh_dest="$3" status="${4:-creating}"
-  local escaped_id escaped_repo escaped_dest
-  escaped_id=$(sql_escape "$ship_id")
-  escaped_repo=$(sql_escape "$repo")
-  escaped_dest=$(sql_escape "$ssh_dest")
-  duckdb "$(msg_db)" "INSERT INTO ships (id, repo, ssh_dest, status) VALUES ('$escaped_id', '$escaped_repo', '$escaped_dest', '$status');"
-}
-
-_update_ship_status() {
-  local ship_id="$1" status="$2"
-  local escaped_id
-  escaped_id=$(sql_escape "$ship_id")
-  duckdb "$(msg_db)" "UPDATE ships SET status = '$status' WHERE id = '$escaped_id';"
+  local ship_id="$1" repo="$2"
+  local file
+  file="$(ships_json)"
+  local tmp="${file}.tmp"
+  jq --arg id "$ship_id" --arg repo "$repo" '.[$id] = {repo: $repo}' "$file" > "$tmp" && mv "$tmp" "$file"
 }
 
 _ship_create_impl() {
@@ -471,7 +443,7 @@ _ship_create_impl() {
   dotfiles_env=$(echo "$vm_output" | sed -n '3p')
 
   log "Registering ship..."
-  _register_ship "$ship_id" "$repo" "$ssh_dest"
+  _register_ship "$ship_id" "$repo"
 
   # Build init environment
   log "Running captain init on ship..."
@@ -486,9 +458,6 @@ _ship_create_impl() {
   [[ -n "${GH_TOKEN:-}" && -n "$repo" ]] && init_args="GH_TOKEN=$(printf %q "$GH_TOKEN") $init_args"
 
   ssh "$ssh_dest" "$init_args ~/.local/bin/ohcommodore _init_captain $(printf %q "$repo")"
-
-  log "Updating ship status..."
-  _update_ship_status "$ship_id" "ready"
 
   log "Created ship: $ship_id"
 }
@@ -517,7 +486,6 @@ _ship_destroy_impl() {
   local ship_id
   ship_id=$(resolve_ship_prefix "$prefix")
 
-  _update_ship_status "$ship_id" "destroying"
   _remove_exe_vm "ship-${ship_id}"
   _delete_ship "$ship_id"
 
@@ -526,9 +494,10 @@ _ship_destroy_impl() {
 
 _delete_ship() {
   local ship_id="$1"
-  local escaped_id
-  escaped_id=$(sql_escape "$ship_id")
-  duckdb "$(msg_db)" "DELETE FROM ships WHERE id = '$escaped_id';"
+  local file
+  file="$(ships_json)"
+  local tmp="${file}.tmp"
+  jq --arg id "$ship_id" 'del(.[$id])' "$file" > "$tmp" && mv "$tmp" "$file"
 }
 
 cmd_ship_ssh() {
@@ -624,23 +593,6 @@ _fleet_sink_direct() {
   log "Direct cleanup complete."
 }
 
-init_common() {
-  local identity="$1"
-  local db
-  db="$(msg_db)"
-
-  # Initialize config database
-  init_messages_db
-
-  local escaped_identity
-  escaped_identity=$(sql_escape "$identity")
-
-  duckdb "$db" "
-    INSERT INTO config (key, value) VALUES ('IDENTITY', '$escaped_identity')
-      ON CONFLICT (key) DO NOTHING;
-  "
-}
-
 cmd__init_commodore() {
   log "Initializing commodore identity..."
   mkdir -p "$CONFIG_DIR"
@@ -648,23 +600,8 @@ cmd__init_commodore() {
 
   run_init_script commodore
 
-  log "Initializing databases..."
-  local flagship_hostname
-  flagship_hostname=$(hostname -f 2>/dev/null || hostname)
-
-  # Create common config
-  init_common "commodore@$flagship_hostname"
-
-  # Create ships table (commodore-only)
-  duckdb "$(msg_db)" "
-    CREATE TABLE IF NOT EXISTS ships (
-      id TEXT PRIMARY KEY,
-      repo TEXT,
-      ssh_dest TEXT NOT NULL,
-      status TEXT DEFAULT 'creating',
-      created_at TEXT DEFAULT (current_timestamp)
-    );
-  "
+  log "Initializing ships registry..."
+  init_ships_registry
 
   log "Commodore initialized."
 }
@@ -737,18 +674,10 @@ _inbox_send() {
 }
 
 _inbox_identity() {
-  local identity
-  identity=$(duckdb "$(msg_db)" -noheader -csv "SELECT value FROM config WHERE key = 'IDENTITY'" 2>/dev/null)
-
-  # Ensure we have a valid email-style identity
-  if [[ -z "$identity" ]]; then
-    local role hostname
-    role=$(get_role)
-    hostname=$(hostname -f 2>/dev/null || hostname)
-    identity="${role}@${hostname}"
-  fi
-
-  echo "$identity"
+  local role hostname
+  role=$(get_role)
+  hostname=$(hostname -f 2>/dev/null || hostname)
+  echo "${role}@${hostname}"
 }
 
 cmd__scheduler() {

@@ -21,7 +21,6 @@ You're using `ssh exe.dev rm` to destroy VMs directly. Use the ohcommodore CLI i
 ```
 
 **Why CLI is better:**
-- Updates the ships registry in DuckDB
-- Handles status lifecycle (creating → ready → destroying)
+- Updates the ships registry in JSON
 - Cleans up local config when scuttling
 - Provides consistent UX with prefix matching

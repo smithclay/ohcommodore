@@ -14,14 +14,14 @@ Commodore (local CLI: ./ohcommodore)
     │ SSH
     ▼
 Flagship (exe.dev VM, long-running coordinator)
-    │ Stores fleet in DuckDB, manages ships via SSH
+    │ Stores fleet in JSON, manages ships via SSH
     │
     │ SSH
     ▼
 Ships (exe.dev VMs, multiple per repo with unique IDs)
 ```
 
-**Key design principle**: Minimal external dependencies (bash, ssh, nats, duckdb). All communication happens over SSH tunnels using NATS pub/sub.
+**Key design principle**: Minimal external dependencies (bash, ssh, nats, jq). All communication happens over SSH tunnels using NATS pub/sub.
 
 ## File Structure
 
@@ -34,7 +34,7 @@ Ships (exe.dev VMs, multiple per repo with unique IDs)
 
 **Local config:** `~/.ohcommodore/config.json` stores flagship SSH destination (local only)
 
-**VM state:** `~/.ohcommodore/ns/<namespace>/data.duckdb` stores fleet registry (flagship), local config, and messages.
+**Fleet registry:** `~/.ohcommodore/ns/<namespace>/ships.json` stores ship-to-repo mapping (flagship only). Live VM state comes from `ssh exe.dev ls -json`.
 
 ## Commands
 
@@ -88,7 +88,7 @@ When a ship is created, `cloudinit/init.sh` runs and installs:
 - Rust toolchain via rustup
 - Oh My Zsh with zsh as default shell
 - Dotfiles via chezmoi
-- DuckDB CLI and NATS CLI (autossh tunnel to flagship NATS server)
+- NATS CLI (autossh tunnel to flagship NATS server)
 
 ## NATS Messaging System
 

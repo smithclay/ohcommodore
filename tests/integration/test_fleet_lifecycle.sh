@@ -91,7 +91,7 @@ main() {
   status_output=$("$PROJECT_ROOT/ohcommodore" fleet status 2>&1)
 
   assert_contains "Shows ship in fleet" "$status_output" "$ship_name"
-  assert_contains "Ship has ready status" "$status_output" "ready"
+  assert_contains "Ship has running status" "$status_output" "running"
 
   # ============================================
   # Test 5: SSH into ship works

@@ -75,7 +75,7 @@ The `cloudinit/` directory contains the initialization script that runs on both 
 - Rust toolchain via rustup
 - Oh My Zsh
 - [Dotfiles via chezmoi](https://www.chezmoi.io/)
-- DuckDB and inbox system for inter-ship communication
+- NATS CLI for inter-ship communication
 
 ### Environment Variables
 
@@ -142,11 +142,11 @@ ohcommodore inbox delete <id>      # Remove message
 
 ### How It Works
 
-- Each VM has a DuckDB database at `~/.ohcommodore/ns/<namespace>/data.duckdb`
-- Messages are delivered via SCP to a file-based queue, then ingested into the database
-- The `ohcommodore _scheduler` daemon polls for unread messages and executes commands
+- Fleet registry stored in `~/.ohcommodore/ns/<namespace>/ships.json` (flagship only)
+- Live VM state fetched from `ssh exe.dev ls -json`
+- Messages delivered via NATS pub/sub over SSH tunnels
+- The `ohcommodore _scheduler` daemon subscribes to NATS and executes commands
 - Results (stdout, stderr) are stored in the artifacts directory
-- Message statuses: `unread` → `done` (tracked via `handled_at` timestamp)
 
 ## Requirements
 

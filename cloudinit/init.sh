@@ -126,17 +126,6 @@ fi
 # ship infrastructure (inbox + scheduler)
 # ──────────────────────────────────────────────────────────
 
-log "Installing DuckDB CLI..."
-if ! need_cmd duckdb; then
-  curl -fL -o /tmp/duckdb.zip \
-    https://github.com/duckdb/duckdb/releases/latest/download/duckdb_cli-linux-amd64.zip
-  unzip -o /tmp/duckdb.zip -d /tmp
-  sudo mv /tmp/duckdb /usr/local/bin/
-  sudo chmod +x /usr/local/bin/duckdb
-  rm /tmp/duckdb.zip
-else
-  log "DuckDB already installed — skipping"
-fi
 
 # ──────────────────────────────────────────────────────────
 # NATS infrastructure (commodore only)
@@ -268,18 +257,6 @@ fi
 
 log "Setting up ship directories..."
 mkdir -p ~/.local/bin ~/.ohcommodore/ns/default
-
-log "Initializing DuckDB SSH secrets..."
-duckdb ~/.ohcommodore/ns/default/data.duckdb "
-  INSTALL sshfs FROM community;
-  LOAD sshfs;
-
-  -- Configure SSH key for SSHFS connections
-  CREATE PERSISTENT SECRET IF NOT EXISTS sshfs_key (
-    TYPE SSH,
-    KEY_PATH '$HOME/.ssh/id_ed25519'
-  );
-"
 
 log "Creating systemd user service for scheduler..."
 mkdir -p ~/.config/systemd/user
