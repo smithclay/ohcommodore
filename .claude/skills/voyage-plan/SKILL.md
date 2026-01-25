@@ -117,30 +117,24 @@ Create 10-30 tasks as individual JSON files in `.claude/plans/{feature-slug}/tas
 ```json
 {
   "id": "1",
-  "subject": "[ship-0] Task title in imperative form",
-  "description": "ASSIGNED TO: ship-0\n\nDetailed description of what to do.\n\nFiles: path/to/file.py, path/to/other.py\n\nAcceptance: Specific testable outcome",
+  "subject": "Task title in imperative form",
+  "description": "Detailed description of what to do.\n\nFiles: path/to/file.py, path/to/other.py\n\nAcceptance: Specific testable outcome",
   "activeForm": "Working on task title",
   "status": "pending",
   "blockedBy": [],
   "blocks": ["2", "3"],
   "metadata": {
     "voyage": "{voyage-name}",
-    "ship": "ship-{N}",
     "repo": "{owner/repo}"
   }
 }
 ```
 
-**CRITICAL: Ship assignment must be visible in subject and description:**
-- Subject format: `[ship-N] Task title` (e.g., `[ship-0] Implement JWT token generation`)
-- Description must start with: `ASSIGNED TO: ship-N\n\n`
-- Claude Code's TaskGet may not expose metadata, so ship assignment MUST be in visible fields
-
 **Task rules:**
 - Each task completable in <30 minutes
 - Use `blockedBy` for dependencies (task IDs as strings)
 - Use `blocks` to indicate what this task unblocks
-- Assign ships round-robin: tasks at level 0 get ship-0, ship-1, ship-2..., dependent tasks follow their blockers when possible
+- Do NOT pre-assign tasks to ships - ships dynamically claim tasks at runtime
 - All statuses start as "pending"
 - IDs are string numbers: "1", "2", "3", etc.
 
@@ -202,7 +196,7 @@ Recommended ships: {N}
 Max parallel width: {N}
 
 Ready to launch:
-  ocaptain sail --plan .claude/plans/{feature-slug}/
+  ocaptain sail .claude/plans/{feature-slug}/
 ```
 
 ## Example
@@ -216,17 +210,17 @@ Output structure:
 ├── verify.sh
 ├── voyage.json
 └── tasks/
-    ├── 1.json   # [ship-0] Analyze codebase
-    ├── 2.json   # [ship-1] Add JWT dependency
-    ├── 3.json   # [ship-2] Create User model (blocked by 1)
-    ├── 4.json   # [ship-0] Implement token generation (blocked by 2,3)
-    ├── 5.json   # [ship-1] Create login endpoint (blocked by 4)
-    ├── 6.json   # [ship-2] Create registration endpoint (blocked by 3)
-    ├── 7.json   # [ship-0] Add auth middleware (blocked by 4)
-    ├── 8.json   # [ship-1] Protect routes (blocked by 7)
-    ├── 9.json   # [ship-2] Write auth tests (blocked by 5,6,7)
-    ├── 10.json  # [ship-0] Update API docs (blocked by 5,6)
-    └── 11.json  # [ship-0] Verify exit criteria (blocked by all)
+    ├── 1.json   # Analyze codebase
+    ├── 2.json   # Add JWT dependency
+    ├── 3.json   # Create User model (blocked by 1)
+    ├── 4.json   # Implement token generation (blocked by 2,3)
+    ├── 5.json   # Create login endpoint (blocked by 4)
+    ├── 6.json   # Create registration endpoint (blocked by 3)
+    ├── 7.json   # Add auth middleware (blocked by 4)
+    ├── 8.json   # Protect routes (blocked by 7)
+    ├── 9.json   # Write auth tests (blocked by 5,6,7)
+    ├── 10.json  # Update API docs (blocked by 5,6)
+    └── 11.json  # Verify exit criteria (blocked by all)
 ```
 
 voyage.json:
