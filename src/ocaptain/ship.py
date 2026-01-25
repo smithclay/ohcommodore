@@ -44,8 +44,8 @@ def bootstrap_ship(
         # Get home directory for SFTP operations (c.put doesn't expand ~)
         home = c.run("echo $HOME", hide=True).stdout.strip()
 
-        # 2. Install sshfs and mount shared storage
-        c.run("sudo apt-get update -qq && sudo apt-get install -y -qq sshfs", hide=True)
+        # 2. Install sshfs and expect (for auto-accepting bypass permissions dialog)
+        c.run("sudo apt-get update -qq && sudo apt-get install -y -qq sshfs expect", hide=True)
         c.run(f"mkdir -p ~/voyage ~/.claude/tasks/{voyage.task_list_id}")
         # Add storage to known_hosts and mount via sshfs
         sshfs_opts = (
@@ -67,6 +67,40 @@ def bootstrap_ship(
         # 4. Install stop hook
         c.run("cp ~/voyage/on-stop.sh ~/.ocaptain/hooks/on-stop.sh")
 
+        # 4b. Create expect script for auto-accepting bypass permissions dialog
+        # Handle multiple TUI dialogs by selecting "continue" options
+        expect_script = r"""#!/usr/bin/expect -f
+set timeout -1
+spawn -noecho {*}$argv
+# Loop to handle multiple dialogs (bypass permissions, settings errors, etc.)
+# Each dialog has 2 options - we want to select option 2 and continue
+expect {
+    "Yes, I accept" {
+        # Bypass permissions dialog - select option 2
+        send "\x1b\[B"
+        sleep 0.1
+        send "\r"
+        exp_continue
+    }
+    "Continue without these settings" {
+        # Settings error dialog - select option 2 to continue
+        send "\x1b\[B"
+        sleep 0.1
+        send "\r"
+        exp_continue
+    }
+    "Begin" {
+        # Claude is ready for input - start interaction
+    }
+    timeout {
+        # Fallback - just interact
+    }
+}
+interact
+"""
+        c.put(BytesIO(expect_script.encode()), f"{home}/.ocaptain/run-claude.exp")
+        c.run("chmod +x ~/.ocaptain/run-claude.exp")
+
         # 5. Configure Claude Code
         c.run("mkdir -p ~/.claude")
         # Skip onboarding
@@ -79,7 +113,7 @@ def bootstrap_ship(
             "hooks": {
                 "Stop": [
                     {
-                        "matcher": {},
+                        "matcher": "",  # Empty string matches all
                         "hooks": [
                             {
                                 "type": "command",

@@ -1,10 +1,11 @@
 You are on voyage {voyage_id}.
 
-FIRST: Read your ship identity:
+FIRST: Read your ship identity and verify connectivity:
 ```bash
 cat ~/.ocaptain/ship_id
+ls ~/.claude/tasks/{task_list_id}/
 ```
-This returns your ship ID (e.g., "ship-0", "ship-1", etc.). Use this to filter tasks.
+This returns your ship ID (e.g., "ship-0", "ship-1", etc.) and lists available task files. Use your ship ID to filter tasks.
 
 Objective: {prompt}
 Workspace: ~/voyage/workspace

@@ -19,15 +19,28 @@ def _build_ship_command(ship: VM, ship_id: str, voyage: Voyage, oauth_token: str
         "-o ServerAliveCountMax=3"
     )
 
-    # The command to run on the ship
+    # Wrapper script that captures errors and keeps window open for debugging
+    # Uses unbuffered output via tee and captures exit status
+    # Uses expect script to auto-accept the bypass permissions dialog
     remote_cmd = (
         f"cd ~/voyage/workspace && "
-        f"CLAUDE_CODE_OAUTH_TOKEN={shlex.quote(oauth_token)} "
-        f"CLAUDE_CODE_TASK_LIST_ID={shlex.quote(voyage.task_list_id)} "
+        f"echo '[{ship_id}] Starting at '$(date -Iseconds) >> ~/voyage/logs/{ship_id}.log && "
+        f"export CLAUDE_CODE_OAUTH_TOKEN={shlex.quote(oauth_token)} && "
+        f"export CLAUDE_CODE_TASK_LIST_ID={shlex.quote(voyage.task_list_id)} && "
+        # Use expect script to auto-accept the bypass permissions dialog
+        f"~/.ocaptain/run-claude.exp "
         f"claude --dangerously-skip-permissions "
-        f"--system-prompt-file ~/voyage/prompt.md "
+        f"--system-prompt-file $HOME/voyage/prompt.md "
         f"'Begin' "
-        f"2>&1 | tee -a ~/voyage/logs/{ship_id}.log"
+        f"2>&1 | tee -a ~/voyage/logs/{ship_id}.log ; "
+        # Capture exit status and log it
+        f"EXIT_CODE=$? && "
+        f"echo '' >> ~/voyage/logs/{ship_id}.log && "
+        f'echo "[{ship_id}] Exit $EXIT_CODE at $(date -Iseconds)" '
+        f">> ~/voyage/logs/{ship_id}.log && "
+        # Keep window open for 60s to allow debugging
+        f"echo 'Ship {ship_id} finished (exit $EXIT_CODE). Window closes in 60s...' && "
+        f"sleep 60"
     )
 
     return f"ssh {ssh_opts} {ship.ssh_dest} {shlex.quote(remote_cmd)}"
