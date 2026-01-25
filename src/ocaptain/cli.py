@@ -1,5 +1,6 @@
 """Typer CLI for ocaptain."""
 
+import json
 import re
 import subprocess  # nosec B404
 from datetime import datetime
@@ -25,49 +26,47 @@ console = Console()
 
 @app.command()
 def sail(
-    prompt: str = typer.Argument(None, help="The objective for the voyage"),
-    repo: str = typer.Option(..., "--repo", "-r", help="GitHub repo (owner/name)"),
-    ships: int = typer.Option(3, "--ships", "-n", help="Number of ships to provision"),
-    plan: str = typer.Option(None, "--plan", "-p", help="Path to voyage plan file"),
+    plan: str = typer.Argument(..., help="Path to voyage plan directory"),
+    ships: int = typer.Option(None, "--ships", "-n", help="Override recommended ship count"),
 ) -> None:
-    """Launch a new voyage."""
-    # Handle plan file
-    plan_content: str | None = None
-    exit_criteria: list[str] | None = None
-
-    if plan:
-        plan_path = Path(plan)
-        if not plan_path.exists():
-            console.print(f"[red]Error:[/red] Plan file not found: {plan}")
-            raise typer.Exit(1)
-
-        plan_content = plan_path.read_text()
-
-        # Validate plan has required sections
-        validation_errors = _validate_plan(plan_content)
-        if validation_errors:
-            console.print("[red]Error:[/red] Invalid plan file:")
-            for error in validation_errors:
-                console.print(f"  - {error}")
-            raise typer.Exit(1)
-
-        # Extract objective from plan if prompt not provided
-        if not prompt:
-            extracted = _extract_objective(plan_content)
-            if not extracted:
-                console.print("[red]Error:[/red] Could not extract objective from plan")
-                raise typer.Exit(1)
-            prompt = extracted
-
-        # Extract exit criteria
-        exit_criteria = _extract_exit_criteria(plan_content)
-        console.print(f"[dim]Plan loaded: {plan_path.name}[/dim]")
-        console.print(f"[dim]  Tasks: {_count_tasks(plan_content)}[/dim]")
-        console.print(f"[dim]  Exit criteria: {len(exit_criteria or [])} commands[/dim]")
-
-    elif not prompt:
-        console.print("[red]Error:[/red] Either prompt or --plan is required")
+    """Launch a new voyage from a plan directory."""
+    plan_dir = Path(plan)
+    if not plan_dir.is_dir():
+        console.print(f"[red]Error:[/red] Plan directory not found: {plan}")
         raise typer.Exit(1)
+
+    # Validate plan directory structure
+    validation_errors = _validate_plan_dir(plan_dir)
+    if validation_errors:
+        console.print("[red]Error:[/red] Invalid plan directory:")
+        for error in validation_errors:
+            console.print(f"  - {error}")
+        raise typer.Exit(1)
+
+    # Load voyage.json
+    voyage_json = json.loads((plan_dir / "voyage.json").read_text())
+    tasks_dir = plan_dir / "tasks"
+    task_count = len(list(tasks_dir.glob("*.json")))
+
+    # Get values from voyage.json
+    repo = voyage_json["repo"]
+    if not ships:
+        ships = voyage_json.get("recommended_ships", 3)
+
+    # Load spec.md and verify.sh content
+    spec_content = (plan_dir / "spec.md").read_text()
+    verify_content = (plan_dir / "verify.sh").read_text()
+
+    # Extract objective from spec
+    prompt = _extract_objective_from_spec(spec_content)
+    if not prompt:
+        console.print("[red]Error:[/red] Could not extract objective from spec.md")
+        raise typer.Exit(1)
+
+    console.print(f"[dim]Plan loaded: {plan_dir.name}[/dim]")
+    console.print(f"[dim]  Repo: {repo}[/dim]")
+    console.print(f"[dim]  Tasks: {task_count} (pre-created)[/dim]")
+    console.print(f"[dim]  Ships: {ships}[/dim]")
 
     # Load and validate tokens before provisioning
     try:
@@ -86,7 +85,13 @@ def sail(
 
     with console.status(f"Launching voyage with {ships} ships..."):
         voyage = voyage_mod.sail(
-            prompt, repo, ships, tokens, plan_content=plan_content, exit_criteria=exit_criteria
+            prompt,
+            repo,
+            ships,
+            tokens,
+            spec_content=spec_content,
+            verify_content=verify_content,
+            tasks_dir=tasks_dir,
         )
 
     console.print(f"\n[green]✓[/green] Voyage [bold]{voyage.id}[/bold] launched")
@@ -401,6 +406,36 @@ def _format_age(dt: datetime) -> str:
         return f"{hours}h{minutes % 60}m"
 
 
+def _validate_plan_dir(plan_dir: Path) -> list[str]:
+    """Validate plan directory has required artifacts. Returns list of errors."""
+    errors = []
+
+    required_files = ["spec.md", "verify.sh", "voyage.json"]
+    for fname in required_files:
+        if not (plan_dir / fname).exists():
+            errors.append(f"Missing required file: {fname}")
+
+    tasks_dir = plan_dir / "tasks"
+    if not tasks_dir.is_dir():
+        errors.append("Missing tasks/ directory")
+    elif not list(tasks_dir.glob("*.json")):
+        errors.append("tasks/ directory has no JSON files")
+
+    # Validate voyage.json structure
+    voyage_json_path = plan_dir / "voyage.json"
+    if voyage_json_path.exists():
+        try:
+            voyage_json = json.loads(voyage_json_path.read_text())
+            if "repo" not in voyage_json:
+                errors.append("voyage.json missing 'repo' field")
+            if "recommended_ships" not in voyage_json:
+                errors.append("voyage.json missing 'recommended_ships' field")
+        except json.JSONDecodeError as e:
+            errors.append(f"voyage.json is invalid JSON: {e}")
+
+    return errors
+
+
 def _validate_plan(content: str) -> list[str]:
     """Validate plan file has required sections. Returns list of errors."""
     errors = []
@@ -437,6 +472,23 @@ def _extract_objective(content: str) -> str | None:
         # Take first paragraph or first 500 chars
         first_para = objective.split("\n\n")[0]
         return first_para[:500] if len(first_para) > 500 else first_para
+    return None
+
+
+def _extract_objective_from_spec(content: str) -> str | None:
+    """Extract objective from spec.md file."""
+    # Try "## Objective" first, then "# ... Specification" title
+    match = re.search(r"## Objective\s*\n(.*?)(?=\n## |\Z)", content, re.DOTALL)
+    if match:
+        objective = match.group(1).strip()
+        first_para = objective.split("\n\n")[0]
+        return first_para[:500] if len(first_para) > 500 else first_para
+
+    # Try first H1 as fallback
+    match = re.search(r"^# (.+?)$", content, re.MULTILINE)
+    if match:
+        return match.group(1).replace(" Specification", "").strip()
+
     return None
 
 

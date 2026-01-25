@@ -7,129 +7,232 @@ allowed-tools: ["Read", "Glob", "Grep", "Bash", "Write", "Task"]
 
 # Voyage Plan Generator
 
-Generate a structured plan file that ocaptain ships can execute with strict task tracking.
+Generate a complete voyage plan with pre-created tasks for ocaptain ships.
+
+## Output Structure
+
+You will create four artifacts in `.claude/plans/{feature-slug}/`:
+
+```
+.claude/plans/{feature-slug}/
+├── spec.md              # Design document - what to build and why
+├── verify.sh            # Exit criteria - deterministic pass/fail script
+├── voyage.json          # Configuration with recommended ship count
+└── tasks/
+    ├── 1.json           # Pre-created task files
+    ├── 2.json
+    └── ...
+```
 
 ## Process
 
-### Step 1: Understand the Feature Request
+### Step 1: Gather Inputs
 
-Parse the user's feature description to identify:
-- Core functionality required
-- Integration points with existing code
-- Testing requirements
-- Success criteria
+Ask the user for:
+- Feature description (what to build)
+- Repository in `owner/repo` format
+- Voyage name (or generate one like `voyage-{feature-slug}`)
 
 ### Step 2: Explore the Codebase
 
 Use exploration tools to understand:
-1. **Project structure** - Find source directories, test directories, config files
+1. **Project structure** - Source directories, test directories, config files
 2. **Existing patterns** - How similar features are implemented
 3. **Test infrastructure** - pytest, jest, go test, etc.
-4. **Build/lint tools** - Commands available in package.json, pyproject.toml, Makefile, etc.
+4. **Build/lint tools** - Commands in package.json, pyproject.toml, Makefile, CI config
 5. **Code conventions** - Style, naming, architecture patterns
 
-### Step 3: Identify Exit Criteria Commands
+### Step 3: Identify Exit Criteria
 
 Search for verification commands in:
 - `package.json` scripts (npm test, npm run lint, npm run typecheck)
 - `pyproject.toml` (pytest, ruff, mypy)
 - `Makefile` targets
 - CI configuration (.github/workflows/)
-- README instructions
 
-The exit criteria MUST be concrete commands that return 0 on success.
+Exit criteria MUST be concrete commands that return 0 on success.
 
-### Step 4: Break Down into Tasks
+### Step 4: Write spec.md
 
-Create 10-30 parallelizable tasks following these rules:
-- Each task should be completable in <30 minutes
-- Tasks should have clear dependencies (use "depends: N" notation)
-- Independent tasks can be worked in parallel
-- Each task specifies files to modify
-- Each task has acceptance criteria
-
-Task granularity guidelines:
-- **Too coarse**: "Implement authentication" (needs breakdown)
-- **Too fine**: "Add import statement" (merge into larger task)
-- **Just right**: "Implement JWT token generation in auth/tokens.py"
-
-### Step 5: Generate Plan File
-
-Create the plan file at `.claude/plans/{feature-slug}-plan.md` using this exact structure:
+Create `.claude/plans/{feature-slug}/spec.md` with:
 
 ```markdown
-# Voyage Plan: {feature-name}
+# {Feature Name} Specification
 
 ## Objective
 
-{Clear 2-3 sentence description of what to build and why}
+{2-3 sentence description of what to build and why}
 
-## Tasks
+## Architecture
 
-1. Task title (no deps)
-   - Description of what to do
-   - Files to modify: path/to/file.py, path/to/other.py
-   - Acceptance: Specific testable outcome
+{Key design decisions, abstractions, data flow}
 
-2. Task title (depends: 1)
-   - Description
-   - Files: path/to/file.py
-   - Acceptance: What success looks like
+## Components
 
-3. Task title (depends: 1)
-   - Can run in parallel with task 2
-   - Files: different/path.py
-   - Acceptance: Criteria
+{Major components/modules to create or modify}
 
-{Continue for all tasks...}
+## Error Handling
+
+{How errors should be handled}
+
+## Testing Strategy
+
+{What tests to write, coverage expectations}
 
 ## Exit Criteria
 
+The following commands must pass:
+- `{command1}`
+- `{command2}`
+- `{command3}`
+```
+
+### Step 5: Write verify.sh
+
+Create `.claude/plans/{feature-slug}/verify.sh`:
+
 ```bash
-# All commands must pass for voyage completion
+#!/bin/bash
+set -e
+cd ~/voyage/workspace
+
+echo "Running: {command1}"
 {command1}
+echo "  PASSED"
+
+echo "Running: {command2}"
 {command2}
-{command3}
+echo "  PASSED"
+
+echo ""
+echo "All exit criteria passed!"
 ```
 
-## Requirements
+### Step 6: Create tasks/
 
-- [ ] Specific acceptance criterion 1
-- [ ] Specific acceptance criterion 2
-- [ ] All tests pass
-- [ ] No linting errors
+Create 10-30 tasks as individual JSON files in `.claude/plans/{feature-slug}/tasks/`.
+
+**Task file format (e.g., `1.json`):**
+
+```json
+{
+  "id": "1",
+  "title": "Task title in imperative form",
+  "description": "Detailed description of what to do.\n\nFiles: path/to/file.py, path/to/other.py\n\nAcceptance: Specific testable outcome",
+  "status": "pending",
+  "blockedBy": [],
+  "blocks": ["2", "3"],
+  "created": "{ISO timestamp}",
+  "updated": "{ISO timestamp}",
+  "metadata": {
+    "voyage": "{voyage-name}",
+    "ship": "ship-{N}",
+    "repo": "{owner/repo}"
+  }
+}
 ```
 
-### Step 6: Validate the Plan
+**Task rules:**
+- Each task completable in <30 minutes
+- Use `blockedBy` for dependencies (task IDs as strings)
+- Use `blocks` to indicate what this task unblocks
+- Assign ships round-robin: tasks at level 0 get ship-0, ship-1, ship-2..., dependent tasks follow their blockers when possible
+- All statuses start as "pending"
+- IDs are string numbers: "1", "2", "3", etc.
+
+**Task granularity:**
+- Too coarse: "Implement authentication" (break down further)
+- Too fine: "Add import statement" (merge into larger task)
+- Just right: "Implement JWT token generation in auth/tokens.py"
+
+### Step 7: Run DAG Analyzer
+
+Run the DAG analyzer to compute recommended ships:
+
+```bash
+python3 ~/.claude/skills/voyage-plan/dag_analyzer.py .claude/plans/{feature-slug}/tasks/
+```
+
+This outputs JSON with `recommended_ships` based on max parallel width.
+
+### Step 8: Write voyage.json
+
+Create `.claude/plans/{feature-slug}/voyage.json` using analyzer output:
+
+```json
+{
+  "name": "{voyage-name}",
+  "repo": "{owner/repo}",
+  "recommended_ships": {from analyzer},
+  "max_parallel_width": {from analyzer},
+  "total_tasks": {from analyzer},
+  "created": "{ISO timestamp}"
+}
+```
+
+### Step 9: Validate
 
 Before finishing, verify:
+- [ ] spec.md exists with objective and exit criteria
+- [ ] verify.sh exists and is valid bash
+- [ ] All task files are valid JSON
 - [ ] All dependencies form a valid DAG (no cycles)
-- [ ] Tasks are numbered sequentially
-- [ ] Each task has files and acceptance criteria
-- [ ] Exit criteria commands exist and are runnable
-- [ ] Final "Verify exit criteria" task depends on ALL other tasks
+- [ ] Tasks are numbered sequentially starting from 1
+- [ ] Each task has title, description, and metadata
+- [ ] voyage.json has recommended_ships
+- [ ] Final task depends on all others (integration/verification task)
 
-## Output
+### Step 10: Report
 
-After generating the plan, report:
-1. Plan file location
-2. Number of tasks created
-3. Parallelization potential (max parallel tasks at any level)
-4. Exit criteria commands identified
+Output summary:
+```
+Voyage plan created: .claude/plans/{feature-slug}/
+
+Files:
+  - spec.md (design document)
+  - verify.sh (exit criteria)
+  - voyage.json (configuration)
+  - tasks/ ({N} tasks)
+
+Recommended ships: {N}
+Max parallel width: {N}
+
+Ready to launch:
+  ocaptain sail --plan .claude/plans/{feature-slug}/
+```
 
 ## Example
 
-For input: "Add user authentication with JWT"
+For input: "Add user authentication with JWT to owner/myapp"
 
-Output plan might include:
-- Task 1: Analyze codebase and document auth requirements (no deps)
-- Task 2: Add JWT library dependency (no deps)
-- Task 3: Create User model with password hashing (depends: 1)
-- Task 4: Implement JWT token generation (depends: 2, 3)
-- Task 5: Create login endpoint (depends: 4)
-- Task 6: Create registration endpoint (depends: 3)
-- Task 7: Add auth middleware (depends: 4)
-- Task 8: Protect existing routes (depends: 7)
-- Task 9: Write auth tests (depends: 5, 6, 7)
-- Task 10: Update API documentation (depends: 5, 6)
-- Task 11: Verify exit criteria (depends: ALL)
+Output structure:
+```
+.claude/plans/user-auth/
+├── spec.md
+├── verify.sh
+├── voyage.json
+└── tasks/
+    ├── 1.json   # Analyze codebase (ship-0)
+    ├── 2.json   # Add JWT dependency (ship-1)
+    ├── 3.json   # Create User model (ship-2, blocked by 1)
+    ├── 4.json   # Implement token generation (ship-0, blocked by 2,3)
+    ├── 5.json   # Create login endpoint (ship-1, blocked by 4)
+    ├── 6.json   # Create registration endpoint (ship-2, blocked by 3)
+    ├── 7.json   # Add auth middleware (ship-0, blocked by 4)
+    ├── 8.json   # Protect routes (ship-1, blocked by 7)
+    ├── 9.json   # Write auth tests (ship-2, blocked by 5,6,7)
+    ├── 10.json  # Update API docs (ship-0, blocked by 5,6)
+    └── 11.json  # Verify exit criteria (ship-0, blocked by all)
+```
+
+voyage.json:
+```json
+{
+  "name": "voyage-user-auth",
+  "repo": "owner/myapp",
+  "recommended_ships": 3,
+  "max_parallel_width": 3,
+  "total_tasks": 11,
+  "created": "2026-01-25T12:00:00Z"
+}
+```

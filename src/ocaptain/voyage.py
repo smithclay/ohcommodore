@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from importlib.resources import files
 from io import BytesIO
+from pathlib import Path
 
 from fabric import Connection
 
@@ -60,8 +61,9 @@ def sail(
     repo: str,
     ships: int | None = None,
     tokens: dict[str, str] | None = None,
-    plan_content: str | None = None,
-    exit_criteria: list[str] | None = None,
+    spec_content: str | None = None,
+    verify_content: str | None = None,
+    tasks_dir: "Path | None" = None,
 ) -> Voyage:
     """
     Launch a new voyage.
@@ -69,15 +71,17 @@ def sail(
     1. Create storage VM
     2. Initialize voyage directory structure
     3. Clone repository
-    4. Bootstrap ship VMs in parallel
+    4. Copy pre-created tasks (if provided)
+    5. Bootstrap ship VMs in parallel
 
     Args:
         prompt: The objective for the voyage
         repo: GitHub repository in "owner/repo" format
         ships: Number of ship VMs to provision
         tokens: Dict with CLAUDE_CODE_OAUTH_TOKEN (required) and optionally GH_TOKEN
-        plan_content: Optional structured plan file content
-        exit_criteria: Optional list of exit criteria commands
+        spec_content: Optional spec.md content (design document)
+        verify_content: Optional verify.sh content (exit criteria script)
+        tasks_dir: Optional path to tasks/ directory with pre-created task JSON files
     """
     if tokens is None:
         tokens = {}
@@ -110,18 +114,29 @@ def sail(
         c.put(BytesIO(voyage.to_json().encode()), f"{voyage_dir}/voyage.json")
 
         # 6. Write ship prompt template
-        prompt_content = render_ship_prompt(voyage, has_plan=plan_content is not None)
+        prompt_content = render_ship_prompt(voyage, has_tasks=tasks_dir is not None)
         c.put(BytesIO(prompt_content.encode()), f"{voyage_dir}/prompt.md")
 
-        # 7. Write plan file if provided
-        if plan_content:
-            c.put(BytesIO(plan_content.encode()), f"{voyage_dir}/artifacts/plan.md")
+        # 7. Write spec.md if provided
+        if spec_content:
+            c.put(BytesIO(spec_content.encode()), f"{voyage_dir}/artifacts/spec.md")
 
-        # 8. Write verify.sh script if exit criteria provided
-        if exit_criteria:
-            verify_script = render_verify_script(exit_criteria)
-            c.put(BytesIO(verify_script.encode()), f"{voyage_dir}/artifacts/verify.sh")
+        # 8. Write verify.sh if provided
+        if verify_content:
+            c.put(BytesIO(verify_content.encode()), f"{voyage_dir}/artifacts/verify.sh")
             c.run("chmod +x ~/voyage/artifacts/verify.sh")
+
+        # 9. Copy pre-created tasks if provided
+        if tasks_dir:
+            tasks_path = Path(tasks_dir)
+            task_dest = f"{home}/.claude/tasks/{voyage.task_list_id}"
+            for task_file in sorted(tasks_path.glob("*.json")):
+                # Update task metadata with actual voyage ID
+                task_data = json.loads(task_file.read_text())
+                if "metadata" in task_data:
+                    task_data["metadata"]["voyage"] = voyage.id
+                task_json = json.dumps(task_data, indent=2)
+                c.put(BytesIO(task_json.encode()), f"{task_dest}/{task_file.name}")
 
         # 10. Write stop hook
         hook_content = render_stop_hook()
@@ -218,9 +233,13 @@ def sink_all() -> int:
     return len(vms)
 
 
-def render_ship_prompt(voyage: Voyage, has_plan: bool = False) -> str:
+def render_ship_prompt(voyage: Voyage, has_tasks: bool = False) -> str:
     """Render the ship prompt template."""
-    template = files("ocaptain.templates").joinpath("ship_prompt.md").read_text()
+    if has_tasks:
+        # Use simplified prompt when tasks are pre-created
+        template = files("ocaptain.templates").joinpath("ship_prompt_with_tasks.md").read_text()
+    else:
+        template = files("ocaptain.templates").joinpath("ship_prompt.md").read_text()
 
     return template.format(
         voyage_id=voyage.id,
