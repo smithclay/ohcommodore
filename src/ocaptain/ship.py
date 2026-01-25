@@ -22,7 +22,8 @@ def bootstrap_ship(
     4. Install stop hook
     5. Configure Claude Code (with secure token injection)
     6. Authenticate GitHub CLI (if GH_TOKEN provided)
-    7. Start Claude Code
+
+    Note: Claude is launched separately via zellij from the storage VM.
 
     Args:
         voyage: The voyage configuration
@@ -96,21 +97,7 @@ def bootstrap_ship(
             c.run(f"echo {shlex.quote(gh_token)} | gh auth login --with-token", hide=True)
             c.run("gh auth setup-git", hide=True)
 
-        # 7. Write and run start script
-        # Use --system-prompt-file to avoid shell quoting issues
-        oauth_token = tokens.get("CLAUDE_CODE_OAUTH_TOKEN", "")
-        # Use 'script' with -c for pseudo-TTY (fixes CLI hang without TTY)
-        start_script = f"""#!/bin/bash
-export CLAUDE_CODE_OAUTH_TOKEN={shlex.quote(oauth_token)}
-export CLAUDE_CODE_TASK_LIST_ID={shlex.quote(voyage.task_list_id)}
-cd ~/voyage/workspace
-
-script -q ~/voyage/logs/{ship_id}.log -c \\
-  "claude -p --dangerously-skip-permissions --system-prompt-file ~/voyage/prompt.md 'Begin'"
-"""
-        c.put(BytesIO(start_script.encode()), f"{home}/.ocaptain/start.sh")
-        c.run(f"chmod +x {home}/.ocaptain/start.sh")
-        c.run(f"nohup {home}/.ocaptain/start.sh &", disown=True)
+        # Ship is now ready - Claude will be launched via zellij from storage
 
     return ship
 

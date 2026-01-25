@@ -251,6 +251,9 @@ def resume(
     ships: int = typer.Option(1, "--ships", "-n", help="Number of ships to add"),
 ) -> None:
     """Add ships to an incomplete voyage."""
+    from . import zellij as zellij_mod
+    from .ship import add_ships
+
     # Load tokens before provisioning
     try:
         tokens = load_tokens()
@@ -268,9 +271,10 @@ def resume(
     ]
     start_index = max(ship_indices, default=-1) + 1
 
-    from .ship import add_ships
-
     new_ships = add_ships(voyage, storage, ships, start_index, tokens)
+
+    # Launch new ships via zellij (adds panes to existing session)
+    zellij_mod.add_ships_to_session(voyage, storage, new_ships, start_index, tokens)
 
     console.print(f"[green]✓[/green] Added {len(new_ships)} ships to voyage.")
 
@@ -278,20 +282,31 @@ def resume(
 @app.command()
 def shell(
     voyage_id: str = typer.Argument(..., help="Voyage ID"),
-    ship_id: str = typer.Argument(..., help="Ship ID (e.g., ship-0 or ship0)"),
+    ship_id: str | None = typer.Argument(None, help="Ship ID to focus (e.g., ship-0)"),
+    raw: bool = typer.Option(False, "--raw", "-r", help="SSH directly to ship instead of zellij"),
 ) -> None:
-    """SSH into a ship for debugging."""
+    """Attach to voyage's zellij session to observe ships."""
+    from . import zellij as zellij_mod
 
-    provider = get_provider()
-    ship_index = _parse_ship_index(ship_id)
-    ship_name = f"{voyage_id}-ship{ship_index}"
-    vm = next((v for v in provider.list() if v.name == ship_name), None)
+    voyage, storage = voyage_mod.load_voyage(voyage_id)
 
-    if not vm:
-        console.print(f"[red]Ship not found: {ship_name}[/red]")
-        raise typer.Exit(1)
+    if raw and ship_id:
+        # Direct SSH to ship (for debugging)
+        provider = get_provider()
+        idx = _parse_ship_index(ship_id)
+        ship_name = f"{voyage_id}-ship{idx}"
+        vm = next((v for v in provider.list() if v.name == ship_name), None)
 
-    subprocess.run(["ssh", vm.ssh_dest])  # nosec: B603, B607
+        if not vm:
+            console.print(f"[red]Ship not found: {ship_name}[/red]")
+            raise typer.Exit(1)
+
+        subprocess.run(["ssh", vm.ssh_dest])  # nosec: B603, B607
+    else:
+        # Attach to zellij session
+        focus_pane = _parse_ship_index(ship_id) if ship_id else None
+        cmd = zellij_mod.attach_session(storage, voyage_id, focus_pane)
+        subprocess.run(cmd)  # nosec: B603, B607
 
 
 @app.command()
@@ -304,6 +319,7 @@ def sink(
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
 ) -> None:
     """Destroy voyage VMs (keeps storage by default)."""
+    from . import zellij as zellij_mod
 
     if all_voyages:
         if not force:
@@ -314,6 +330,13 @@ def sink(
         count = voyage_mod.sink_all()
         console.print(f"[green]✓[/green] Destroyed {count} VMs.")
     elif voyage_id:
+        # Kill zellij session first (if storage is accessible)
+        try:
+            voyage, storage = voyage_mod.load_voyage(voyage_id)
+            zellij_mod.kill_session(storage, voyage_id)
+        except Exception:  # nosec: B110 - Storage may already be gone
+            pass
+
         if include_storage:
             if not force:
                 confirm = typer.confirm(f"Destroy all VMs for {voyage_id} (including storage)?")

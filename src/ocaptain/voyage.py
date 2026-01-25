@@ -13,6 +13,7 @@ from fabric import Connection
 
 from .config import CONFIG
 from .provider import VM, get_provider
+from .providers.exedev import ExeDevProvider
 
 
 @dataclass(frozen=True)
@@ -143,7 +144,11 @@ def sail(
         c.put(BytesIO(hook_content.encode()), f"{voyage_dir}/on-stop.sh")
         c.run("chmod +x ~/voyage/on-stop.sh")
 
-    # 11. Bootstrap ships in parallel
+    # 11. Install zellij on storage for session management
+    if isinstance(provider, ExeDevProvider):
+        provider.install_zellij(storage)
+
+    # 12. Bootstrap ships in parallel
     import logging
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -151,6 +156,7 @@ def sail(
 
     logger = logging.getLogger(__name__)
 
+    successful_ships: list[VM] = []
     failed_ships: list[tuple[int, Exception]] = []
     with ThreadPoolExecutor(max_workers=ships) as executor:
         futures = {
@@ -160,7 +166,8 @@ def sail(
         for future in as_completed(futures):
             ship_idx = futures[future]
             try:
-                future.result()
+                ship_vm = future.result()
+                successful_ships.append(ship_vm)
             except Exception as e:
                 logger.warning("Ship-%d bootstrap failed: %s", ship_idx, e)
                 failed_ships.append((ship_idx, e))
@@ -178,6 +185,14 @@ def sail(
             ships,
             [i for i, _ in failed_ships],
         )
+
+    # 13. Launch fleet via zellij on storage
+    # Sort ships by index for consistent pane ordering
+    successful_ships.sort(key=lambda vm: int(vm.name.split("ship")[-1]))
+
+    from .zellij import launch_fleet
+
+    launch_fleet(voyage, storage, successful_ships, tokens)
 
     return voyage
 
