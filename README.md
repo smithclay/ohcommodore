@@ -5,9 +5,9 @@
 
 > O Captain! my Captain! our fearful Claude Code session is done, The repo has weather'd every rack, the prize we sought is won.
 
-Minimalist multi-coding agent control plane built on top of [exe.dev](https://exe.dev) VMs. Orchestration uses Claude Code's [task list](https://x.com/trq212/status/2014480496013803643?s=20) feature: tasks are distributed among multiple, full-featured Linux VMs that coordinate work in parallel.
+Minimalist multi-coding agent control plane built on top of [exe.dev](https://exe.dev) VMs. Orchestration is managed by Claude Code's built-in [task list](https://x.com/trq212/status/2014480496013803643?s=20) feature: work is distributed by the `ocaptain` CLI to cloud VMs ("ships") that work in parallel on a plan you generate with Claude.
 
-Inspired by Steve Yegge's [Gas Town](https://github.com/steveyegge/gastown), this is going to be one of approximately 40,000 coding agent orchestration tools in 2026. Spiritual successor to [claudetainer](https://github.com/smithclay/claudetainer).
+No Kubernetes, no local sandboxes, no containers, no asking for permissions and less than 1400 lines of Python code.
 
 ## Table of Contents
 
@@ -19,6 +19,7 @@ Inspired by Steve Yegge's [Gas Town](https://github.com/steveyegge/gastown), thi
 - [Voyage Plans](#voyage-plans)
 - [Configuration](#configuration)
 - [Security](#security)
+- [Background](#background)
 
 ## What it does
 
@@ -30,18 +31,19 @@ You (local) → ocaptain sail → exe.dev VMs → Ships claim tasks → Code lan
 
 ## Why?
 
-- Deploy parallel Claude Code agents with one command
-- No container complexity—full Linux VMs with SSH access
-- Observe ships in real-time via tmux
+- Deploy parallel, autonomous Claude Code instances with one command in the cloud
+- No container complexity: full Linux VMs with SSH access
+- Observe remote parallel in real-time via tmux
 - Task-based coordination means no conflicts, no merge hell
+- Built-in OpenTelemetry observability (WIP)
 
 ## Quickstart
 
 ### Prerequisites
 
 1. [exe.dev](https://exe.dev) account with SSH configured
-2. Claude Code OAuth token (from `~/.claude.json` after authenticating)
-3. GitHub token (for private repos)
+2. Claude Code long-lived OAuth token (subscription required, from `claude setup-token`)
+3. GitHub PAT token (for private repos or pushing code)
 
 ### Install
 
@@ -55,6 +57,8 @@ uv sync
 ### Set credentials
 
 ```bash
+# Get a long-lived OAuth token associated with your subscription:
+# run `claude setup-token` and use the value below
 export CLAUDE_CODE_OAUTH_TOKEN="your-token-here"
 export GH_TOKEN="ghp_xxxx"  # optional, for private repos
 ```
@@ -201,48 +205,6 @@ uv run ocaptain sink --all -f                   # Destroy ALL ocaptain VMs
 | `--all` | Destroy ALL ocaptain VMs |
 | `--force, -f` | Skip confirmation |
 
-## Voyage Plans
-
-Voyages launch from plan directories containing structured artifacts.
-
-### Directory Structure
-
-```
-plans/my-feature/
-├── voyage.json      # Voyage configuration
-├── spec.md          # Design document / specification
-├── verify.sh        # Exit criteria script
-└── tasks/
-    ├── 001-setup.json
-    ├── 002-core-impl.json
-    └── 003-tests.json
-```
-
-### voyage.json
-
-```json
-{
-  "repo": "owner/repo-name",
-  "recommended_ships": 3
-}
-```
-
-### Task Files
-
-Each task file seeds the shared task list:
-
-```json
-{
-  "id": "task-001",
-  "subject": "Set up project scaffolding",
-  "description": "Create directory structure and initial files...",
-  "status": "pending",
-  "blockedBy": []
-}
-```
-
-Tasks can declare dependencies via `blockedBy` to enforce ordering.
-
 ## Configuration
 
 ### Environment Variables
@@ -270,7 +232,6 @@ ssh exe.dev ls
 
 ### Token Handling
 
-- Tokens passed via environment, never written to disk on VMs
 - GitHub auth uses `gh auth login --with-token` (stdin, not args)
 - SSHFS mounts use SSH keys, not passwords
 
