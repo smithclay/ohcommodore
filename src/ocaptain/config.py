@@ -18,6 +18,7 @@ class OcaptainConfig(BaseModel):
     provider: str = "exedev"
     default_ships: Annotated[int, Field(gt=0)] = 3
     stale_threshold_minutes: Annotated[int, Field(gt=0)] = 30
+    telemetry_enabled: bool = True
 
 
 def load_config() -> OcaptainConfig:
@@ -32,6 +33,9 @@ def load_config() -> OcaptainConfig:
     # Environment overrides
     if provider := os.environ.get("OCAPTAIN_PROVIDER"):
         data["provider"] = provider
+
+    if telemetry := os.environ.get("OCAPTAIN_TELEMETRY"):
+        data["telemetry_enabled"] = telemetry.lower() in ("1", "true", "yes")
 
     return OcaptainConfig(**data)
 

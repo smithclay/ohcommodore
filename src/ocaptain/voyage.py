@@ -64,6 +64,7 @@ def sail(
     spec_content: str | None = None,
     verify_content: str | None = None,
     tasks_dir: "Path | None" = None,
+    telemetry: bool = True,
 ) -> Voyage:
     """
     Launch a new voyage.
@@ -82,6 +83,7 @@ def sail(
         spec_content: Optional spec.md content (design document)
         verify_content: Optional verify.sh content (exit criteria script)
         tasks_dir: Optional path to tasks/ directory with pre-created task JSON files
+        telemetry: Enable OTLP telemetry collection (default True)
     """
     if tokens is None:
         tokens = {}
@@ -109,6 +111,47 @@ def sail(
         # 4. Clone repository (use gh CLI - handles auth properly after gh auth setup-git)
         c.run(f"gh repo clone {repo} ~/voyage/workspace")
         c.run(f"cd ~/voyage/workspace && git checkout -b {voyage.branch}")
+
+        # 4b. Install and launch otlp2parquet for telemetry collection
+        if telemetry:
+            # Install otlp2parquet from GitHub releases
+            arch_cmd = "$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+            c.run(
+                "curl -sL https://github.com/smithclay/otlp2parquet/releases/latest/download/"
+                f"otlp2parquet-cli-linux-{arch_cmd}.tar.gz "
+                "| tar -xzf - --strip-components=1 && sudo mv otlp2parquet /usr/local/bin/",
+                hide=True,
+            )
+
+            # Create telemetry directory
+            c.run("mkdir -p ~/voyage/telemetry")
+
+            # Write config
+            otlp_config = f"""[server]
+listen_addr = "127.0.0.1:4318"
+log_level = "info"
+log_format = "text"
+
+[storage]
+backend = "fs"
+
+[storage.fs]
+path = "{home}/voyage/telemetry"
+
+[batch]
+max_rows = 10000
+max_bytes = 67108864
+max_age_secs = 30
+enabled = true
+"""
+            c.put(BytesIO(otlp_config.encode()), f"{voyage_dir}/otlp2parquet.toml")
+
+            # Start in background
+            c.run(
+                f"nohup otlp2parquet --config {voyage_dir}/otlp2parquet.toml "
+                f"> {voyage_dir}/logs/otlp2parquet.log 2>&1 &",
+                hide=True,
+            )
 
         # 5. Write voyage.json
         c.put(BytesIO(voyage.to_json().encode()), f"{voyage_dir}/voyage.json")
@@ -157,7 +200,8 @@ def sail(
     failed_ships: list[tuple[int, Exception]] = []
     with ThreadPoolExecutor(max_workers=ships) as executor:
         futures = {
-            executor.submit(bootstrap_ship, voyage, storage, i, tokens): i for i in range(ships)
+            executor.submit(bootstrap_ship, voyage, storage, i, tokens, telemetry): i
+            for i in range(ships)
         }
 
         for future in as_completed(futures):

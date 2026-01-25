@@ -13,6 +13,7 @@ from rich.table import Table
 from . import logs as logs_mod
 from . import tasks as tasks_mod
 from . import voyage as voyage_mod
+from .config import CONFIG
 from .provider import get_provider
 from .secrets import load_tokens, validate_repo_access
 
@@ -28,6 +29,7 @@ console = Console()
 def sail(
     plan: str = typer.Argument(..., help="Path to voyage plan directory"),
     ships: int = typer.Option(None, "--ships", "-n", help="Override recommended ship count"),
+    no_telemetry: bool = typer.Option(False, "--no-telemetry", help="Disable OTLP telemetry"),
 ) -> None:
     """Launch a new voyage from a plan directory."""
     plan_dir = Path(plan)
@@ -63,10 +65,14 @@ def sail(
         console.print("[red]Error:[/red] Could not extract objective from spec.md")
         raise typer.Exit(1)
 
+    # Determine effective telemetry setting
+    telemetry = not no_telemetry and CONFIG.telemetry_enabled
+
     console.print(f"[dim]Plan loaded: {plan_dir.name}[/dim]")
     console.print(f"[dim]  Repo: {repo}[/dim]")
     console.print(f"[dim]  Tasks: {task_count} (pre-created)[/dim]")
     console.print(f"[dim]  Ships: {ships}[/dim]")
+    console.print(f"[dim]  Telemetry: {'enabled' if telemetry else 'disabled'}[/dim]")
 
     # Load and validate tokens before provisioning
     try:
@@ -92,6 +98,7 @@ def sail(
             spec_content=spec_content,
             verify_content=verify_content,
             tasks_dir=tasks_dir,
+            telemetry=telemetry,
         )
 
     console.print(f"\n[green]✓[/green] Voyage [bold]{voyage.id}[/bold] launched")
