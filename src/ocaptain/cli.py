@@ -251,7 +251,7 @@ def resume(
     ships: int = typer.Option(1, "--ships", "-n", help="Number of ships to add"),
 ) -> None:
     """Add ships to an incomplete voyage."""
-    from . import zellij as zellij_mod
+    from . import tmux as tmux_mod
     from .ship import add_ships
 
     # Load tokens before provisioning
@@ -273,8 +273,8 @@ def resume(
 
     new_ships = add_ships(voyage, storage, ships, start_index, tokens)
 
-    # Launch new ships via zellij (adds panes to existing session)
-    zellij_mod.add_ships_to_session(voyage, storage, new_ships, start_index, tokens)
+    # Launch new ships via tmux (adds panes to existing session)
+    tmux_mod.add_ships_to_session(voyage, storage, new_ships, start_index, tokens)
 
     console.print(f"[green]✓[/green] Added {len(new_ships)} ships to voyage.")
 
@@ -283,10 +283,10 @@ def resume(
 def shell(
     voyage_id: str = typer.Argument(..., help="Voyage ID"),
     ship_id: str | None = typer.Argument(None, help="Ship ID to focus (e.g., ship-0)"),
-    raw: bool = typer.Option(False, "--raw", "-r", help="SSH directly to ship instead of zellij"),
+    raw: bool = typer.Option(False, "--raw", "-r", help="SSH directly to ship instead of tmux"),
 ) -> None:
-    """Attach to voyage's zellij session to observe ships."""
-    from . import zellij as zellij_mod
+    """Attach to voyage's tmux session to observe ships."""
+    from . import tmux as tmux_mod
 
     voyage, storage = voyage_mod.load_voyage(voyage_id)
 
@@ -303,9 +303,9 @@ def shell(
 
         subprocess.run(["ssh", vm.ssh_dest])  # nosec: B603, B607
     else:
-        # Attach to zellij session
+        # Attach to tmux session
         focus_pane = _parse_ship_index(ship_id) if ship_id else None
-        cmd = zellij_mod.attach_session(storage, voyage_id, focus_pane)
+        cmd = tmux_mod.attach_session(storage, voyage_id, focus_pane)
         subprocess.run(cmd)  # nosec: B603, B607
 
 
@@ -319,7 +319,7 @@ def sink(
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
 ) -> None:
     """Destroy voyage VMs (keeps storage by default)."""
-    from . import zellij as zellij_mod
+    from . import tmux as tmux_mod
 
     if all_voyages:
         if not force:
@@ -330,10 +330,10 @@ def sink(
         count = voyage_mod.sink_all()
         console.print(f"[green]✓[/green] Destroyed {count} VMs.")
     elif voyage_id:
-        # Kill zellij session first (if storage is accessible)
+        # Kill tmux session first (if storage is accessible)
         try:
             voyage, storage = voyage_mod.load_voyage(voyage_id)
-            zellij_mod.kill_session(storage, voyage_id)
+            tmux_mod.kill_session(storage, voyage_id)
         except Exception:  # nosec: B110 - Storage may already be gone
             pass
 

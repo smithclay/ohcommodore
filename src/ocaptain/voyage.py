@@ -13,7 +13,6 @@ from fabric import Connection
 
 from .config import CONFIG
 from .provider import VM, get_provider
-from .providers.exedev import ExeDevProvider
 
 
 @dataclass(frozen=True)
@@ -144,9 +143,7 @@ def sail(
         c.put(BytesIO(hook_content.encode()), f"{voyage_dir}/on-stop.sh")
         c.run("chmod +x ~/voyage/on-stop.sh")
 
-    # 11. Install zellij on storage for session management
-    if isinstance(provider, ExeDevProvider):
-        provider.install_zellij(storage)
+    # 11. tmux is pre-installed on most Linux systems, no install needed
 
     # 12. Bootstrap ships in parallel
     import logging
@@ -190,7 +187,7 @@ def sail(
     # Sort ships by index for consistent pane ordering
     successful_ships.sort(key=lambda vm: int(vm.name.split("ship")[-1]))
 
-    from .zellij import launch_fleet
+    from .tmux import launch_fleet
 
     launch_fleet(voyage, storage, successful_ships, tokens)
 
