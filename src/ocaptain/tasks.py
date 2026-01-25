@@ -85,7 +85,7 @@ class Task:
             blocks=data.get("blocks", []),
             created=created,
             updated=updated,
-            assignee=metadata.get("assignee") or metadata.get("ship"),
+            assignee=data.get("owner") or metadata.get("assignee") or metadata.get("ship"),
             claimed_at=(
                 _parse_datetime(metadata["claimed_at"]) if metadata.get("claimed_at") else None
             ),

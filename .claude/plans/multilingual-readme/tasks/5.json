@@ -1,8 +1,8 @@
 {
   "id": "5",
-  "subject": "[ship-4] Create Brazilian Portuguese README (README.pt-BR.md)",
-  "description": "ASSIGNED TO: ship-4\n\nCreate a Brazilian Portuguese language README file for the Hello-World repository.\n\nFile: README.pt-BR.md\n\nContent should include:\n- Brazilian Portuguese greeting: \"Olá Mundo!\"\n- Brief description in Portuguese explaining this is a multilingual version\n- Link to the main README\n\nAcceptance: README.pt-BR.md exists and contains valid UTF-8 Portuguese text",
-  "activeForm": "Create Brazilian Portuguese README (README.pt-BR.md)",
+  "subject": "Create Brazilian Portuguese README (README.pt-BR.md)",
+  "description": "Create a Brazilian Portuguese language README file for the Hello-World repository.\n\nFile: README.pt-BR.md\n\nContent should include:\n- Brazilian Portuguese greeting: \"Olá Mundo!\"\n- Brief description in Portuguese explaining this is a multilingual version\n- Link to the main README\n\nAcceptance: README.pt-BR.md exists and contains valid UTF-8 Portuguese text",
+  "activeForm": "Creating Brazilian Portuguese README",
   "status": "pending",
   "blocks": [
     "6"
@@ -10,7 +10,6 @@
   "blockedBy": [],
   "metadata": {
     "voyage": "voyage-multilingual-readme",
-    "ship": "ship-4",
     "repo": "octocat/Hello-World"
   }
 }

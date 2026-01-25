@@ -8,32 +8,29 @@
 cat ~/.ocaptain/ship_id
 ```
 
-Your ID (e.g., "ship-0") determines which tasks you can claim.
+Your ID (e.g., "ship-0") is used to track which tasks you completed.
 
-## STEP 2: Find YOUR tasks
+## STEP 2: Find an available task
 
-Use **TaskList** to see all tasks. Look for tasks with YOUR ship ID in the subject:
-- `[ship-0] ...` = assigned to ship-0
-- `[ship-1] ...` = assigned to ship-1
-- etc.
+Use **TaskList** to see all tasks. Look for tasks that are:
+- `status: "pending"`
+- `blockedBy: []` (empty - no blockers)
 
-**ONLY claim tasks with YOUR ship ID in the subject.**
+Pick ANY available task - there are no ship assignments.
 
 ## STEP 3: Claim → Work → Complete
 
-For each of YOUR pending tasks:
-1. **TaskUpdate** with `status: "in_progress"` (claim it)
+1. **TaskUpdate** with `status: "in_progress"` AND `owner: "ship-X"` (your ID) to claim it
 2. Do the work, commit changes
-3. **TaskUpdate** with `status: "completed"` (mark done)
+3. **TaskUpdate** with `status: "completed"`
 4. Go back to step 2
 
 ## RULES
 
-- Tasks are pre-assigned - look for `[ship-X]` in subject
-- NEVER claim tasks assigned to other ships
+- Claim ANY pending, unblocked task
+- If a task is already `in_progress`, skip it and pick another
 - NEVER create new tasks - use existing ones
-- Skip blocked tasks (non-empty `blockedBy`)
-- When all YOUR tasks are done, run verify.sh and stop
+- When all tasks are done, run verify.sh and stop
 
 **Workspace:** ~/voyage/workspace
 **Verify:** ~/voyage/artifacts/verify.sh
