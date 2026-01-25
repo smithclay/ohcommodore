@@ -1,0 +1,61 @@
+# Pre-commit hooks for ocaptain
+# See https://pre-commit.com for more information
+# Install: uv add --dev pre-commit && uv run pre-commit install
+
+repos:
+  # Ruff linter and formatter (fast, Rust-based)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.14
+    hooks:
+      # Linter with auto-fix (runs before formatter)
+      - id: ruff-check
+        args: [--fix]
+      # Formatter
+      - id: ruff-format
+
+  # Type checking with mypy
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.19.1
+    hooks:
+      - id: mypy
+        args: [--strict, --ignore-missing-imports]
+        additional_dependencies:
+          - pydantic>=2.0
+          - typer>=0.12
+          - rich>=13.0
+          - types-paramiko
+
+  # Standard pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # Prevent giant files
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      # Check for files that conflict in case-insensitive fs
+      - id: check-case-conflict
+      # Validate JSON syntax
+      - id: check-json
+      # Validate TOML syntax
+      - id: check-toml
+      # Validate YAML syntax
+      - id: check-yaml
+      # Check for merge conflict markers
+      - id: check-merge-conflict
+      # Detect private keys
+      - id: detect-private-key
+      # Ensure files end with newline
+      - id: end-of-file-fixer
+      # Trim trailing whitespace
+      - id: trailing-whitespace
+      # Prevent committing to main/master
+      - id: no-commit-to-branch
+        args: [--branch, main, --branch, master]
+
+  # Security linting
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.9.0
+    hooks:
+      - id: bandit
+        args: [-c, pyproject.toml]
+        additional_dependencies: ["bandit[toml]"]
