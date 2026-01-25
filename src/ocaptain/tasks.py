@@ -187,25 +187,32 @@ def _check_progress_file(storage: VM) -> str | None:
         return None
 
 
+def _check_completion_marker(storage: VM) -> bool:
+    """Check if voyage-complete.marker exists."""
+    try:
+        with Connection(storage.ssh_dest) as c:
+            result = c.run(
+                "test -f ~/voyage/artifacts/voyage-complete.marker && echo yes || echo no",
+                hide=True,
+            )
+            return str(result.stdout).strip() == "yes"
+    except Exception:
+        return False
+
+
 def derive_status(voyage: "Voyage", storage: VM) -> VoyageStatus:
     """Derive full voyage status from task list."""
     tasks = list_tasks(storage, voyage)
 
     if not tasks:
-        # No tasks - check progress.txt for completion signals
-        progress = _check_progress_file(storage)
-        inferred_state = VoyageState.PLANNING
-
-        if progress:
-            # If progress.txt exists, ships have started working
-            progress_lower = progress.lower()
-            if any(
-                word in progress_lower for word in ["complete", "finished", "done", "accomplished"]
-            ):
-                inferred_state = VoyageState.COMPLETE
-            else:
-                # Progress exists but not complete - still working (without tasks)
-                inferred_state = VoyageState.RUNNING
+        # No tasks - check for completion marker
+        if _check_completion_marker(storage):
+            inferred_state = VoyageState.COMPLETE
+        elif _check_progress_file(storage):
+            # Progress exists but no marker - still working
+            inferred_state = VoyageState.RUNNING
+        else:
+            inferred_state = VoyageState.PLANNING
 
         return VoyageStatus(
             voyage=voyage,

@@ -130,7 +130,7 @@ def test_complete_task_not_stale() -> None:
         id="task-001",
         title="Test",
         description="",
-        status=TaskStatus.COMPLETE,
+        status=TaskStatus.COMPLETED,
         blocked_by=[],
         blocks=[],
         created=old_time,
