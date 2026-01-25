@@ -102,10 +102,11 @@ def bootstrap_ship(
             c.run("gh auth setup-git", hide=True)
 
         # 7. Start Claude Code (detached)
-        # Export token as env var since settings.json env is processed after auth check
+        # Export env vars directly since settings.json env may be processed after auth
         oauth_token = tokens.get("CLAUDE_CODE_OAUTH_TOKEN", "")
         c.run(
             f"nohup env CLAUDE_CODE_OAUTH_TOKEN={shlex.quote(oauth_token)} "
+            f"CLAUDE_CODE_TASK_LIST_ID={shlex.quote(voyage.task_list_id)} "
             "claude -p --dangerously-skip-permissions "
             f'"$(cat ~/voyage/prompt.md)" &> ~/voyage/logs/{ship_id}.log &',
             disown=True,
