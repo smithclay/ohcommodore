@@ -1,8 +1,0 @@
-[otel]
-# Enable OTLP HTTP exporter for logs
-log_user_prompt = true
-exporter = { otlp-http = {
-  endpoint = "",
-  protocol = "binary",
-  headers = { "Authorization" = "" }
-}}

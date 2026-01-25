@@ -1,0 +1,33 @@
+#!/usr/bin/expect -f
+# Auto-accept Claude TUI dialogs (bypass permissions, settings errors)
+set timeout -1
+spawn -noecho {*}$argv
+
+# Loop to handle multiple dialogs
+# Each dialog has 2 options - we select option 2 and continue
+expect {
+    "Yes, I accept" {
+        send "\x1b\[B"
+        sleep 0.1
+        send "\r"
+        exp_continue
+    }
+    "Continue without these settings" {
+        send "\x1b\[B"
+        sleep 0.1
+        send "\r"
+        exp_continue
+    }
+    "Begin" {
+        # Claude is ready for input
+    }
+    timeout {
+        puts stderr "ERROR: Timed out waiting for Claude dialog"
+        exit 1
+    }
+    eof {
+        puts stderr "ERROR: Claude exited unexpectedly"
+        exit 1
+    }
+}
+interact

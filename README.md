@@ -1,163 +1,287 @@
 # ocaptain
 
-[![Bash](https://img.shields.io/badge/Made%20with-Bash-1f425f.svg)](https://www.gnu.org/software/bash/)
+[![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
 [![exe.dev](https://img.shields.io/badge/Powered%20by-exe.dev-orange.svg)](https://exe.dev)
 
-> O Captain! my Captain! our fearful Claude Code session is done, The repo has weather’d every rack, the prize we sought is won.
+> O Captain! my Captain! our fearful Claude Code session is done, The repo has weather'd every rack, the prize we sought is won.
 
-Minimalist multi-agent control plane built on top of [exe.dev](https://exe.dev) VMs. Just under 800 lines of bash code.
+Minimalist multi-coding agent control plane built on top of [exe.dev](https://exe.dev) VMs. Orchestration uses Claude Code's [task list](https://x.com/trq212/status/2014480496013803643?s=20) feature: tasks are distributed among multiple, full-featured Linux VMs that coordinate work in parallel.
 
 Inspired by Steve Yegge's [Gas Town](https://github.com/steveyegge/gastown), this is going to be one of approximately 40,000 coding agent orchestration tools in 2026. Spiritual successor to [claudetainer](https://github.com/smithclay/claudetainer).
 
-## Install
+## Table of Contents
 
-```bash
-brew install smithclay/tap/ocaptain
+- [What it does](#what-it-does)
+- [Why?](#why)
+- [Quickstart](#quickstart)
+- [Architecture](#architecture)
+- [CLI Reference](#cli-reference)
+- [Voyage Plans](#voyage-plans)
+- [Configuration](#configuration)
+- [Security](#security)
+
+## What it does
+
+Provisions a fleet of VMs on exe.dev, each running an autonomous Claude Code agent. Ships mount shared storage via SSHFS and coordinate through a shared task list—no central scheduler, just agents racing to complete work.
+
+```
+You (local) → ocaptain sail → exe.dev VMs → Ships claim tasks → Code lands in git
 ```
 
-## Quick Start
+## Why?
+
+- Deploy parallel Claude Code agents with one command
+- No container complexity—full Linux VMs with SSH access
+- Observe ships in real-time via tmux
+- Task-based coordination means no conflicts, no merge hell
+
+## Quickstart
+
+### Prerequisites
+
+1. [exe.dev](https://exe.dev) account with SSH configured
+2. Claude Code OAuth token (from `~/.claude.json` after authenticating)
+3. GitHub token (for private repos)
+
+### Install
 
 ```bash
-# Add optional Github and Claude credentials to .env:
-# 1) Create a long-lived Claude Code token to use it in your VMs: `claude setup-token`
-# 2) Create a Github PAT at github.com/settings/personal-access-tokens
-cp .env.example .env
-
-# Bootstrap the flagship
-ocaptain init
-
-# Create an empty ship
-ocaptain ship ahoy-hoy
-
-# Create a ship with a git repo checked out to ~ (requires GH_TOKEN in .env)
-ocaptain ship create owner/repo
-
-# SSH into ships
-ocaptain ship ssh ahoy-hoy
+# Clone and install
+git clone https://github.com/smithclay/ohcommodore.git
+cd ohcommodore
+uv sync
 ```
 
-## CLI Commands
+### Set credentials
 
 ```bash
-ocaptain help
+export CLAUDE_CODE_OAUTH_TOKEN="your-token-here"
+export GH_TOKEN="ghp_xxxx"  # optional, for private repos
+```
 
-# Check fleet status
-ocaptain fleet status
+### Launch a voyage
 
-# Sink a ship
-ocaptain ship sink reponame
+```bash
+# From a plan directory (see Voyage Plans section)
+uv run ocaptain sail ./plans/my-feature
 
-# Destroy all ships (direct cleanup; bypasses flagship)
-ocaptain fleet sink
+# Monitor status
+uv run ocaptain status
 
-# Destroy everything (ships + flagship, direct cleanup)
-ocaptain fleet sink --scuttle
+# Watch ships work in real-time
+uv run ocaptain shell voyage-abc123
+
+# View aggregated logs
+uv run ocaptain logs voyage-abc123 --follow
+
+# Scuttle the fleet when done
+uv run ocaptain sink voyage-abc123 --include-storage
 ```
 
 ## Architecture
 
 ```mermaid
 flowchart TB
-    subgraph Local
-        C[Commodore<br/><i>local CLI</i>]
+    subgraph Local["Local Machine"]
+        CLI[ocaptain CLI]
     end
 
-    subgraph exe.dev
-        F[Flagship<br/><i>role: commodore</i>]
-        S1[Ship<br/><i>role: captain</i>]
-        S2[Ship<br/><i>role: captain</i>]
-        S3[Ship<br/><i>role: captain</i>]
+    subgraph ExeDev["exe.dev"]
+        subgraph Storage["Storage VM"]
+            Repo[(Git Repo)]
+            Tasks[(Task List)]
+            Logs[(Aggregated Logs)]
+            Artifacts[spec.md / verify.sh]
+        end
+
+        subgraph Fleet["Ship VMs"]
+            S0[Ship 0<br/>Claude Code]
+            S1[Ship 1<br/>Claude Code]
+            S2[Ship N<br/>Claude Code]
+        end
+
+        S0 -->|SSHFS mount| Storage
+        S1 -->|SSHFS mount| Storage
+        S2 -->|SSHFS mount| Storage
     end
 
-    C -->|SSH| F
-    F -->|SSH| S1
-    F -->|SSH| S2
-    F -->|SSH| S3
+    CLI -->|SSH| Storage
+    CLI -->|SSH| Fleet
 ```
 
-The same `ocaptain` script runs everywhere. Identity is determined by `~/.ocaptain/identity.json`:
-- **local** (no identity file): Commands proxy to flagship via SSH
-- **commodore**: Commands execute directly on the flagship
-- **captain**: Commands execute directly on ships
+### Components
 
-## Cloud Init
+| Component | Description |
+|-----------|-------------|
+| **Storage VM** | Central state: git repo, task list, logs, artifacts. Ships mount this via SSHFS. |
+| **Ship VMs** | Worker agents running Claude Code. Claim tasks, do work, commit changes. |
+| **Task List** | Shared JSON files in `~/.claude/tasks/`. Ships race to claim pending tasks. |
+| **tmux Session** | Runs on storage VM. One pane per ship for real-time observation. |
 
-The `cloudinit/` directory contains the initialization script that runs on both flagship and ship VMs. The script (`init.sh`) sets up a development environment with:
+### Voyage Lifecycle
 
-- Base packages (git, curl, zsh)
-- GitHub CLI with authentication
-- Target repository cloned to `~/<repo-name>`
-- Zellij terminal multiplexer
-- Rust toolchain via rustup
-- Oh My Zsh
-- [Dotfiles via chezmoi](https://www.chezmoi.io/)
-- NATS CLI for inter-ship communication
+1. **Provision** — Storage VM created, repo cloned, tasks seeded
+2. **Bootstrap** — Ship VMs provisioned in parallel, mount shared storage
+3. **Launch** — tmux session starts Claude Code on each ship
+4. **Work** — Ships autonomously claim tasks, commit to shared branch
+5. **Complete** — All tasks done, `verify.sh` runs, ships idle
+6. **Sink** — VMs destroyed, artifacts preserved (optional)
+
+## CLI Reference
+
+### `ocaptain sail <plan>`
+
+Launch a new voyage from a plan directory.
+
+```bash
+uv run ocaptain sail ./plans/add-auth --ships 5
+```
+
+| Option | Description |
+|--------|-------------|
+| `--ships, -n` | Override recommended ship count |
+
+### `ocaptain status [voyage_id]`
+
+Show voyage status derived from task list. Auto-selects if only one active voyage.
+
+```bash
+uv run ocaptain status
+uv run ocaptain status voyage-abc123
+```
+
+### `ocaptain logs <voyage_id>`
+
+View aggregated logs from all ships.
+
+```bash
+uv run ocaptain logs voyage-abc123
+uv run ocaptain logs voyage-abc123 --follow --grep "error"
+```
+
+| Option | Description |
+|--------|-------------|
+| `--ship, -s` | Filter to specific ship |
+| `--follow, -f` | Stream logs in real-time |
+| `--grep, -g` | Filter log lines by pattern |
+| `--tail, -n` | Show last N lines |
+
+### `ocaptain tasks <voyage_id>`
+
+Display task list with status, assignees, and blockers.
+
+```bash
+uv run ocaptain tasks voyage-abc123
+uv run ocaptain tasks voyage-abc123 --status pending
+```
+
+### `ocaptain shell <voyage_id> [ship_id]`
+
+Attach to tmux session to observe ships working.
+
+```bash
+uv run ocaptain shell voyage-abc123           # Full fleet view
+uv run ocaptain shell voyage-abc123 ship-0    # Focus ship 0
+uv run ocaptain shell voyage-abc123 ship-0 --raw  # Direct SSH
+```
+
+### `ocaptain sink <voyage_id>`
+
+Destroy voyage VMs.
+
+```bash
+uv run ocaptain sink voyage-abc123              # Ships only (keeps storage)
+uv run ocaptain sink voyage-abc123 -s           # Include storage
+uv run ocaptain sink --all -f                   # Destroy ALL ocaptain VMs
+```
+
+| Option | Description |
+|--------|-------------|
+| `--include-storage, -s` | Also destroy storage VM |
+| `--all` | Destroy ALL ocaptain VMs |
+| `--force, -f` | Skip confirmation |
+
+## Voyage Plans
+
+Voyages launch from plan directories containing structured artifacts.
+
+### Directory Structure
+
+```
+plans/my-feature/
+├── voyage.json      # Voyage configuration
+├── spec.md          # Design document / specification
+├── verify.sh        # Exit criteria script
+└── tasks/
+    ├── 001-setup.json
+    ├── 002-core-impl.json
+    └── 003-tests.json
+```
+
+### voyage.json
+
+```json
+{
+  "repo": "owner/repo-name",
+  "recommended_ships": 3
+}
+```
+
+### Task Files
+
+Each task file seeds the shared task list:
+
+```json
+{
+  "id": "task-001",
+  "subject": "Set up project scaffolding",
+  "description": "Create directory structure and initial files...",
+  "status": "pending",
+  "blockedBy": []
+}
+```
+
+Tasks can declare dependencies via `blockedBy` to enforce ordering.
+
+## Configuration
 
 ### Environment Variables
 
-The init script accepts these environment variables:
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `CLAUDE_CODE_OAUTH_TOKEN` | Yes | Claude Code authentication token |
+| `GH_TOKEN` | No | GitHub token for private repos |
+| `OCAPTAIN_PROVIDER` | No | VM provider (default: `exedev`) |
+| `OCAPTAIN_DEFAULT_SHIPS` | No | Default ship count (default: `3`) |
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `GH_TOKEN` | Yes | - | GitHub PAT for authentication and repo access |
-| `TARGET_REPO` | No | - | Repository to clone (e.g., `owner/repo`) |
-| `INIT_PATH` | No | - | Local path to init script (scp'd to VMs, overrides `INIT_URL`) |
-| `INIT_URL` | No | GitHub raw URL | Remote URL to init script |
-| `DOTFILES_PATH` | No | - | Local dotfiles directory (scp'd to VMs, highest priority) |
-| `DOTFILES_URL` | No | `https://github.com/smithclay/ocaptain` | Dotfiles repo URL (supports `/dotfiles` subdirectory) |
-| `ROLE` | No | `captain` | Identity role: `captain` for ships, `commodore` for flagship |
+### exe.dev Setup
 
-### Customizing Init and Chezmoi Dotfiles
-
-You can use local files or custom URLs for initialization:
+ocaptain communicates with exe.dev over SSH. Ensure your SSH config can reach exe.dev:
 
 ```bash
-# Use a local init script (scp'd to VMs)
-INIT_PATH=./my-init.sh ocaptain init
+# Test connectivity
+ssh exe.dev help
 
-# Use a custom remote init script
-INIT_URL=https://example.com/my-init.sh ocaptain ship create owner/repo
-
-# Use local chezmoi dotfiles directory (scp'd to VMs)
-DOTFILES_PATH=./my-dotfiles ocaptain init
-
-# Use a custom dotfiles chezmoi repo URL
-DOTFILES_URL=https://github.com/user/dotfiles ocaptain ship create owner/repo
+# List running VMs
+ssh exe.dev ls
 ```
 
-These can also be set in a `.env` file in the ocaptain directory.
+## Security
 
-## Inbox
+### Token Handling
 
-Ships and the flagship communicate via NATS pub/sub over SSH tunnels. Run these commands on a ship (via `ocaptain ship ssh <ship-name>`):
+- Tokens passed via environment, never written to disk on VMs
+- GitHub auth uses `gh auth login --with-token` (stdin, not args)
+- SSHFS mounts use SSH keys, not passwords
 
-```bash
-# Send a command to another ship
-ocaptain inbox send captain@other-ship "cargo test"
+### VM Isolation
 
-# Send a command to commodore
-ocaptain inbox send commodore@flagship "echo 'Report from ship'"
+- Each ship is a full Linux VM with its own filesystem
+- Shared state limited to SSHFS-mounted directories
+- Ships cannot access each other directly
 
-# Get this node's identity
-ocaptain inbox identity
-```
+### Repository Access
 
-### How It Works
-
-- Fleet registry stored in `~/.ocaptain/ns/<namespace>/ships.json` (flagship only)
-- Live VM state fetched from `ssh exe.dev ls -json`
-- Messages delivered via NATS pub/sub over SSH tunnels
-- The `ocaptain _scheduler` daemon subscribes to NATS and executes commands
-- Results (stdout, stderr) are stored in the artifacts directory
-
-## Contributions
-
-Contributions seriously considered if they result in a reduction of the number of lines of code :)
-
-## Requirements
-
-- bash
-- ssh
-- scp
-- jq
-- exe.dev account with SSH access configured
+- Private repos require `GH_TOKEN`
+- Token validity checked before VM provisioning
+- Clone failures surface immediately, not after fleet deploys
