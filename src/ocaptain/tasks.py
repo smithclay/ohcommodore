@@ -168,14 +168,42 @@ def list_tasks(storage: VM, voyage: "Voyage") -> list[Task]:
         return tasks
 
 
+def _check_progress_file(storage: VM) -> str | None:
+    """Check progress.txt for status indicators. Returns last line if exists."""
+    try:
+        with Connection(storage.ssh_dest) as c:
+            result = c.run(
+                "tail -1 ~/voyage/artifacts/progress.txt 2>/dev/null || echo ''",
+                hide=True,
+            )
+            return result.stdout.strip() or None
+    except Exception:
+        return None
+
+
 def derive_status(voyage: "Voyage", storage: VM) -> VoyageStatus:
     """Derive full voyage status from task list."""
     tasks = list_tasks(storage, voyage)
 
     if not tasks:
+        # No tasks - check progress.txt for completion signals
+        progress = _check_progress_file(storage)
+        inferred_state = VoyageState.PLANNING
+
+        if progress:
+            # If progress.txt exists, ships have started working
+            progress_lower = progress.lower()
+            if any(
+                word in progress_lower for word in ["complete", "finished", "done", "accomplished"]
+            ):
+                inferred_state = VoyageState.COMPLETE
+            else:
+                # Progress exists but not complete - still working (without tasks)
+                inferred_state = VoyageState.RUNNING
+
         return VoyageStatus(
             voyage=voyage,
-            state=VoyageState.PLANNING,
+            state=inferred_state,
             ships=(),
             tasks_complete=0,
             tasks_in_progress=0,

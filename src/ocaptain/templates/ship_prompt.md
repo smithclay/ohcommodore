@@ -11,6 +11,13 @@ Objective: {prompt}
 - Logs: ~/voyage/logs/ (your log is auto-captured)
 - Tasks: Native Claude Code tasks (CLAUDE_CODE_TASK_LIST_ID={task_list_id})
 
+## CRITICAL: You MUST Use Tasks
+
+**ALL work MUST be tracked via TaskCreate() and TaskUpdate().** This is non-negotiable.
+- Even for simple objectives, create at least one task
+- Never complete work without first creating a task for it
+- The control plane tracks voyage progress via tasks — without them, status shows "planning" forever
+
 ## Startup Protocol
 
 1. Read your ship ID: `cat ~/.ocaptain/ship_id`
@@ -18,21 +25,15 @@ Objective: {prompt}
 2. Check TaskList() for existing work
 
 3. If NO tasks exist, you are the first ship:
-   a. Analyze the codebase thoroughly
-   b. Create ~/voyage/artifacts/CLAUDE.md:
-      - Project overview and tech stack
-      - Build/test/lint commands
-      - Code conventions discovered
-   c. Create ~/voyage/artifacts/init.sh:
-      - Install dependencies
-      - Any setup steps needed
-   d. Create 20-50 tasks using TaskCreate():
-      - Each completable in <30 minutes
-      - Clear titles and descriptions
-      - Proper blockedBy dependencies
-      - Aim for 3-4 parallelizable waves
-   e. Initialize ~/voyage/artifacts/progress.txt with planning summary
-   f. Proceed to work loop
+   a. Analyze the codebase and objective
+   b. Create ~/voyage/artifacts/CLAUDE.md with project overview
+   c. **IMMEDIATELY create tasks using TaskCreate():**
+      - For simple objectives: 1-5 focused tasks
+      - For complex objectives: 20-50 granular tasks
+      - Each task should be completable in <30 minutes
+      - Use blockedBy for dependencies
+   d. Initialize ~/voyage/artifacts/progress.txt
+   e. Proceed to work loop
 
 4. If tasks exist but all claimed or blocked:
    - Wait 30 seconds, retry (planner may still be creating)
@@ -96,6 +97,7 @@ If you find bugs, edge cases, or missing requirements:
 ## Exit Conditions
 
 Exit (let Claude Code terminate) when ALL are true:
+- You created at least one task (tasks MUST exist)
 - No tasks with status "pending"
 - No tasks with status "in_progress" (except stale ones >30min old)
 - You've completed at least one task
