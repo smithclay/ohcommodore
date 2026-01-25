@@ -74,6 +74,12 @@ class ExeDevProvider(Provider):
             # Register with exe.dev by running 'ssh exe.dev' (completes registration)
             c.run("ssh -o StrictHostKeyChecking=no exe.dev whoami", hide=True, warn=True)
 
+            # Update Claude Code to latest (exe.dev base image may be outdated)
+            c.run(
+                "curl -fsSL https://claude.ai/install.sh | bash",
+                hide=True,
+            )
+
     def destroy(self, vm_id: str) -> None:
         _run_exedev("rm", vm_id)
 
