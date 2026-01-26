@@ -207,6 +207,7 @@ def sail(
             remote_host=ship_ts_ip,
             remote_path=f"{remote_home}/voyage/workspace",
             session_name=f"{session_name}-workspace",
+            extra_ignores=[".claude"],
         )
 
         # Sync tasks

@@ -10,9 +10,10 @@ def _build_create_command(
     remote_host: str,
     remote_path: str,
     session_name: str,
+    extra_ignores: list[str] | None = None,
 ) -> list[str]:
     """Build mutagen sync create command."""
-    return [
+    cmd = [
         "mutagen",
         "sync",
         "create",
@@ -23,6 +24,10 @@ def _build_create_command(
         "--ignore-vcs",
         "--ignore=.git",
     ]
+    if extra_ignores:
+        for ignore in extra_ignores:
+            cmd.append(f"--ignore={ignore}")
+    return cmd
 
 
 def create_sync(
@@ -31,6 +36,7 @@ def create_sync(
     remote_host: str,
     remote_path: str,
     session_name: str,
+    extra_ignores: list[str] | None = None,
 ) -> None:
     """Create a Mutagen sync session from local to remote."""
     cmd = _build_create_command(
@@ -39,6 +45,7 @@ def create_sync(
         remote_host,
         remote_path,
         session_name,
+        extra_ignores,
     )
     subprocess.run(cmd, check=True, capture_output=True)  # nosec: B603, B607
 
