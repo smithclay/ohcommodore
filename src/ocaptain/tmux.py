@@ -2,13 +2,9 @@
 
 import shlex
 import subprocess  # nosec B404
-from collections.abc import Iterator
-from contextlib import contextmanager
-
-from fabric import Connection
 
 from .config import CONFIG
-from .provider import VM, Provider, get_provider
+from .provider import VM
 from .voyage import Voyage
 
 
@@ -22,22 +18,6 @@ def _get_sprites_org() -> str:
     if (sprites_config := CONFIG.providers.get("sprites")) and (org := sprites_config.get("org")):
         return org
     raise ValueError("Sprites org not configured")
-
-
-@contextmanager
-def _get_connection(vm: VM, provider: Provider) -> Iterator[Connection]:
-    """Get appropriate connection for a VM (Fabric or Sprite)."""
-    if _is_sprite_vm(vm):
-        from .providers.sprites import SpritesProvider
-
-        if isinstance(provider, SpritesProvider):
-            with provider.get_connection(vm) as c:
-                yield c
-        else:
-            raise ValueError(f"Sprite VM requires SpritesProvider, got {type(provider)}")
-    else:
-        with Connection(vm.ssh_dest) as c:
-            yield c
 
 
 def _build_ship_command(ship: VM, ship_id: str, voyage: Voyage, oauth_token: str) -> str:
@@ -118,69 +98,6 @@ def _build_sprite_ship_command(ship: VM, ship_id: str, voyage: Voyage, oauth_tok
     return f"sprite exec -o {org} -s {sprite_name} -tty bash -c {shlex.quote(remote_cmd)}"
 
 
-def launch_fleet(voyage: Voyage, storage: VM, ships: list[VM], tokens: dict[str, str]) -> None:
-    """Create tmux session on storage and launch Claude on all ships.
-
-    Args:
-        voyage: The voyage configuration
-        storage: The storage VM where tmux runs
-        ships: List of ship VMs to launch
-        tokens: Dict with CLAUDE_CODE_OAUTH_TOKEN
-    """
-    oauth_token = tokens.get("CLAUDE_CODE_OAUTH_TOKEN", "")
-    session = voyage.id
-    provider = get_provider()
-
-    with _get_connection(storage, provider) as c:
-        # Create new detached tmux session with first ship
-        if ships:
-            first_ship_id = _ship_id_from_vm(voyage, ships[0]) or "ship-0"
-            first_cmd = _build_ship_command(ships[0], first_ship_id, voyage, oauth_token)
-            c.run(
-                f"tmux new-session -d -s {session} -n {first_ship_id} {shlex.quote(first_cmd)}",
-                hide=True,
-            )
-
-            # Add windows for remaining ships
-            for i, ship in enumerate(ships[1:], start=1):
-                ship_id = _ship_id_from_vm(voyage, ship) or f"ship-{i}"
-                cmd = _build_ship_command(ship, ship_id, voyage, oauth_token)
-                c.run(
-                    f"tmux new-window -t {session} -n {ship_id} {shlex.quote(cmd)}",
-                    hide=True,
-                )
-
-
-def attach_session(storage: VM, voyage_id: str, ship_index: int | None = None) -> list[str]:
-    """Return command to attach to a voyage's tmux session.
-
-    Args:
-        storage: The storage VM
-        voyage_id: The voyage ID (also the session name)
-        ship_index: Optional ship index to select
-
-    Returns:
-        Command list suitable for subprocess.run()
-    """
-    if ship_index is not None:
-        tmux_cmd = f"tmux attach -t {voyage_id}:ship-{ship_index}"
-    else:
-        tmux_cmd = f"tmux attach -t {voyage_id}"
-
-    if _is_sprite_vm(storage):
-        org = _get_sprites_org()
-        return ["sprite", "exec", "-o", org, "-s", storage.name, "-tty", "bash", "-c", tmux_cmd]
-    else:
-        return ["ssh", "-t", storage.ssh_dest, tmux_cmd]
-
-
-def kill_session(storage: VM, voyage_id: str) -> None:
-    """Kill a tmux session on the storage VM."""
-    provider = get_provider()
-    with _get_connection(storage, provider) as c:
-        c.run(f"tmux kill-session -t {voyage_id}", warn=True, hide=True)
-
-
 def _ship_id_from_vm(voyage: Voyage, ship: VM) -> str | None:
     """Extract ship id (ship-<n>) from VM name."""
     prefix = f"{voyage.id}-ship"
@@ -194,7 +111,7 @@ def _ship_id_from_vm(voyage: Voyage, ship: VM) -> str | None:
     return f"ship-{suffix}"
 
 
-def launch_fleet_new(
+def launch_fleet(
     voyage: Voyage,
     ships: list[VM],
     tokens: dict[str, str],
@@ -231,8 +148,8 @@ def launch_fleet_new(
         )
 
 
-def attach_session_new(voyage_id: str, ship_index: int | None = None) -> list[str]:
-    """Return command to attach to local tmux session (new implementation)."""
+def attach_session(voyage_id: str, ship_index: int | None = None) -> list[str]:
+    """Return command to attach to local tmux session."""
     if ship_index is not None:
         return ["tmux", "attach", "-t", f"{voyage_id}:ship-{ship_index}"]
     return ["tmux", "attach", "-t", voyage_id]

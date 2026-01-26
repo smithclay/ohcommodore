@@ -4,7 +4,7 @@ sprites.dev operates via CLI - all commands are run via `sprite <command>`.
 Unlike exe.dev, sprites don't have native SSH access, so we use:
 - `sprite exec` for running commands
 - `sprite exec -file` for file transfers
-- chisel tunnels for ship-to-storage communication
+- Tailscale for networking between ships and laptop
 """
 
 import re

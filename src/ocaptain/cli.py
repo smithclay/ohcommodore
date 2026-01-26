@@ -115,27 +115,33 @@ def status(
     voyage_id: str | None = typer.Argument(None, help="Voyage ID (optional if only one active)"),
 ) -> None:
     """Show voyage status (derived from task list)."""
+    from .local_storage import get_voyage_dir
 
     # If no voyage_id, try to find the only active one
     if not voyage_id:
-        provider = get_provider()
-        vms = provider.list(prefix="voyage-")
-        storage_vms = [vm for vm in vms if vm.name.endswith("-storage")]
-
-        if len(storage_vms) == 0:
+        workspace_dir = Path(CONFIG.local.workspace_dir).expanduser()
+        if not workspace_dir.exists():
             console.print("[yellow]No active voyages found.[/yellow]")
             raise typer.Exit(1)
-        elif len(storage_vms) > 1:
+
+        voyage_dirs = [
+            d for d in workspace_dir.iterdir() if d.is_dir() and d.name.startswith("voyage-")
+        ]
+
+        if len(voyage_dirs) == 0:
+            console.print("[yellow]No active voyages found.[/yellow]")
+            raise typer.Exit(1)
+        elif len(voyage_dirs) > 1:
             console.print("[yellow]Multiple voyages found. Please specify voyage_id:[/yellow]")
-            for vm in storage_vms:
-                vid = vm.name.replace("-storage", "")
-                console.print(f"  {vid}")
+            for d in voyage_dirs:
+                console.print(f"  {d.name}")
             raise typer.Exit(1)
         else:
-            voyage_id = storage_vms[0].name.replace("-storage", "")
+            voyage_id = voyage_dirs[0].name
 
-    voyage, storage = voyage_mod.load_voyage(voyage_id)
-    voyage_status = tasks_mod.derive_status(voyage, storage)
+    voyage = voyage_mod.load_voyage(voyage_id)
+    voyage_dir = get_voyage_dir(voyage_id)
+    voyage_status = tasks_mod.derive_status_local(voyage, voyage_dir)
 
     # Header
     console.print(f"\n[bold]Voyage:[/bold] {voyage.id}")
@@ -190,9 +196,11 @@ def logs(
     tail: int | None = typer.Option(None, "--tail", "-n", help="Show last N lines"),
 ) -> None:
     """View aggregated logs."""
+    from .local_storage import get_voyage_dir
 
-    voyage, storage = voyage_mod.load_voyage(voyage_id)
-    logs_mod.view_logs(storage, voyage, ship_id=ship, follow=follow, grep=grep, tail=tail)
+    voyage = voyage_mod.load_voyage(voyage_id)
+    voyage_dir = get_voyage_dir(voyage_id)
+    logs_mod.view_logs_local(voyage_dir, voyage, ship_id=ship, follow=follow, grep=grep, tail=tail)
 
 
 @app.command()
@@ -201,9 +209,11 @@ def tasks(
     status_filter: str | None = typer.Option(None, "--status", "-s", help="Filter by status"),
 ) -> None:
     """Show task list."""
+    from .local_storage import get_voyage_dir
 
-    voyage, storage = voyage_mod.load_voyage(voyage_id)
-    all_tasks = tasks_mod.list_tasks(storage, voyage)
+    voyage = voyage_mod.load_voyage(voyage_id)
+    voyage_dir = get_voyage_dir(voyage_id)
+    all_tasks = tasks_mod.list_tasks_local(voyage_dir, voyage)
 
     if status_filter:
         all_tasks = [t for t in all_tasks if t.status.value == status_filter]
@@ -239,7 +249,8 @@ def shell(
     """Attach to voyage's tmux session to observe ships."""
     from . import tmux as tmux_mod
 
-    voyage, storage = voyage_mod.load_voyage(voyage_id)
+    # Verify voyage exists
+    voyage_mod.load_voyage(voyage_id)
 
     if raw and ship_id:
         # Direct SSH to ship (for debugging)
@@ -254,9 +265,9 @@ def shell(
 
         subprocess.run(["ssh", vm.ssh_dest])  # nosec: B603, B607
     else:
-        # Attach to tmux session
+        # Attach to local tmux session
         focus_pane = _parse_ship_index(ship_id) if ship_id else None
-        cmd = tmux_mod.attach_session(storage, voyage_id, focus_pane)
+        cmd = tmux_mod.attach_session(voyage_id, focus_pane)
         subprocess.run(cmd)  # nosec: B603, B607
 
 
@@ -265,28 +276,37 @@ def clone(
     voyage_id: str | None = typer.Argument(None, help="Voyage ID (optional if only one active)"),
     dest: str | None = typer.Option(None, "--dest", "-d", help="Destination directory"),
 ) -> None:
-    """Clone the workspace from the remote storage vessel."""
+    """Clone the workspace from local voyage storage."""
+    import shutil
+
+    from .local_storage import get_voyage_dir
+
     # If no voyage_id, try to find the only active one
     if not voyage_id:
-        provider = get_provider()
-        vms = provider.list(prefix="voyage-")
-        storage_vms = [vm for vm in vms if vm.name.endswith("-storage")]
-
-        if len(storage_vms) == 0:
+        workspace_dir = Path(CONFIG.local.workspace_dir).expanduser()
+        if not workspace_dir.exists():
             console.print("[yellow]No voyages adrift to salvage from.[/yellow]")
             raise typer.Exit(1)
-        elif len(storage_vms) > 1:
+
+        voyage_dirs = [
+            d for d in workspace_dir.iterdir() if d.is_dir() and d.name.startswith("voyage-")
+        ]
+
+        if len(voyage_dirs) == 0:
+            console.print("[yellow]No voyages adrift to salvage from.[/yellow]")
+            raise typer.Exit(1)
+        elif len(voyage_dirs) > 1:
             console.print(
                 "[yellow]Multiple voyages found. Specify which vessel to plunder:[/yellow]"
             )
-            for vm in storage_vms:
-                vid = vm.name.replace("-storage", "")
-                console.print(f"  {vid}")
+            for d in voyage_dirs:
+                console.print(f"  {d.name}")
             raise typer.Exit(1)
         else:
-            voyage_id = storage_vms[0].name.replace("-storage", "")
+            voyage_id = voyage_dirs[0].name
 
-    voyage, storage = voyage_mod.load_voyage(voyage_id)
+    voyage = voyage_mod.load_voyage(voyage_id)
+    voyage_dir = get_voyage_dir(voyage_id)
 
     # Determine destination directory
     repo_name = voyage.repo.split("/")[-1]
@@ -296,19 +316,15 @@ def clone(
         console.print(f"[red]Destination already exists:[/red] {dest_dir}")
         raise typer.Exit(1)
 
-    console.print(f"[dim]Hauling cargo from {storage.ssh_dest}...[/dim]")
-
-    # Clone via git using ssh
-    remote_path = f"{storage.ssh_dest}:voyage/workspace"
-    result = subprocess.run(  # nosec B603, B607
-        ["git", "clone", remote_path, dest_dir],
-        capture_output=True,
-        text=True,
-    )
-
-    if result.returncode != 0:
-        console.print(f"[red]Failed to clone:[/red] {result.stderr}")
+    source_workspace = voyage_dir / "workspace"
+    if not source_workspace.exists():
+        console.print(f"[red]Workspace not found:[/red] {source_workspace}")
         raise typer.Exit(1)
+
+    console.print(f"[dim]Hauling cargo from {source_workspace}...[/dim]")
+
+    # Copy workspace directory
+    shutil.copytree(source_workspace, dest_dir)
 
     console.print(f"[green]✓[/green] Cargo secured at [bold]{dest_dir}[/bold]")
     console.print(f"  Branch: {voyage.branch}")
@@ -318,18 +334,10 @@ def clone(
 def sink(
     voyage_id: str | None = typer.Argument(None, help="Voyage ID"),
     all_voyages: bool = typer.Option(False, "--all", help="Destroy ALL ocaptain VMs"),
-    include_storage: bool = typer.Option(
-        False, "--include-storage", "-s", help="Also destroy storage VM"
-    ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
 ) -> None:
-    """Destroy voyage VMs (keeps storage by default)."""
+    """Destroy voyage VMs and clean up local session."""
     from . import mutagen as mutagen_mod
-    from . import tmux as tmux_mod
-
-    # Clean up Mutagen sessions before destroying VMs
-    if voyage_id:
-        mutagen_mod.terminate_voyage_syncs(voyage_id)
 
     if all_voyages:
         if not force:
@@ -340,25 +348,22 @@ def sink(
         count = voyage_mod.sink_all()
         console.print(f"[green]✓[/green] Destroyed {count} VMs.")
     elif voyage_id:
-        # Kill tmux session first (if storage is accessible)
-        try:
-            voyage, storage = voyage_mod.load_voyage(voyage_id)
-            tmux_mod.kill_session(storage, voyage_id)
-        except Exception:  # nosec: B110 - Storage may already be gone
-            pass
+        # Clean up Mutagen sessions
+        mutagen_mod.terminate_voyage_syncs(voyage_id)
 
-        if include_storage:
-            if not force:
-                confirm = typer.confirm(f"Destroy all VMs for {voyage_id} (including storage)?")
-                if not confirm:
-                    raise typer.Abort()
+        # Kill local tmux session
+        subprocess.run(  # nosec B603, B607
+            ["tmux", "kill-session", "-t", voyage_id],
+            capture_output=True,
+        )
 
-            count = voyage_mod.sink(voyage_id)
-            console.print(f"[green]✓[/green] Destroyed {count} VMs.")
-        else:
-            # Default: destroy ships only, keep storage (no confirmation needed)
-            count = voyage_mod.abandon(voyage_id)
-            console.print(f"[green]✓[/green] Terminated {count} ships. Storage preserved.")
+        if not force:
+            confirm = typer.confirm(f"Destroy all VMs for {voyage_id}?")
+            if not confirm:
+                raise typer.Abort()
+
+        count = voyage_mod.sink(voyage_id)
+        console.print(f"[green]✓[/green] Destroyed {count} VMs.")
     else:
         console.print("[red]Specify voyage_id or --all[/red]")
         raise typer.Exit(1)

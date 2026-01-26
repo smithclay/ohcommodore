@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
+from pathlib import Path
 
 # Forward reference for Voyage to avoid circular import
 from typing import TYPE_CHECKING, Any
@@ -210,6 +211,135 @@ def derive_status(voyage: "Voyage", storage: VM) -> VoyageStatus:
     if not tasks:
         # No tasks - check artifacts for status
         has_marker, has_progress = _check_voyage_artifacts(storage)
+        if has_marker:
+            inferred_state = VoyageState.COMPLETE
+        elif has_progress:
+            inferred_state = VoyageState.RUNNING
+        else:
+            inferred_state = VoyageState.PLANNING
+
+        return VoyageStatus(
+            voyage=voyage,
+            state=inferred_state,
+            ships=(),
+            tasks_complete=0,
+            tasks_in_progress=0,
+            tasks_pending=0,
+            tasks_stale=0,
+            tasks_total=0,
+        )
+
+    # Count task states
+    complete = [t for t in tasks if t.status == TaskStatus.COMPLETED]
+    in_progress = [t for t in tasks if t.status == TaskStatus.IN_PROGRESS]
+    pending = [t for t in tasks if t.status == TaskStatus.PENDING]
+    stale = [t for t in in_progress if t.is_stale()]
+
+    # Derive ship states from task metadata using mutable intermediate state
+    ship_data: dict[str, dict[str, Any]] = {}
+
+    for task in tasks:
+        if not task.assignee:
+            continue
+
+        if task.assignee not in ship_data:
+            ship_data[task.assignee] = {
+                "state": ShipState.UNKNOWN,
+                "current_task": None,
+                "claimed_at": None,
+                "completed_count": 0,
+            }
+
+        data = ship_data[task.assignee]
+        if task.status == TaskStatus.COMPLETED:
+            data["completed_count"] += 1
+        elif task.status == TaskStatus.IN_PROGRESS:
+            data["state"] = ShipState.STALE if task.is_stale() else ShipState.WORKING
+            data["current_task"] = task.id
+            data["claimed_at"] = task.claimed_at
+
+    # Ships with no in-progress task but completed tasks are idle
+    for data in ship_data.values():
+        if data["state"] == ShipState.UNKNOWN and data["completed_count"] > 0:
+            data["state"] = ShipState.IDLE
+
+    # Convert to frozen ShipStatus objects
+    ships = tuple(
+        sorted(
+            (
+                ShipStatus(
+                    id=ship_id,
+                    state=data["state"],
+                    current_task=data["current_task"],
+                    claimed_at=data["claimed_at"],
+                    completed_count=data["completed_count"],
+                )
+                for ship_id, data in ship_data.items()
+            ),
+            key=lambda s: s.id,
+        )
+    )
+
+    # Derive voyage state
+    voyage_state: VoyageState
+    if len(complete) == len(tasks):
+        voyage_state = VoyageState.COMPLETE
+    elif len(in_progress) == 0 and pending:
+        voyage_state = VoyageState.PLANNING
+    elif len(stale) == len(in_progress) and len(in_progress) > 0 and pending:
+        voyage_state = VoyageState.STALLED
+    else:
+        voyage_state = VoyageState.RUNNING
+
+    return VoyageStatus(
+        voyage=voyage,
+        state=voyage_state,
+        ships=ships,
+        tasks_complete=len(complete),
+        tasks_in_progress=len(in_progress),
+        tasks_pending=len(pending),
+        tasks_stale=len(stale),
+        tasks_total=len(tasks),
+    )
+
+
+def list_tasks_local(voyage_dir: Path, voyage: "Voyage") -> list[Task]:
+    """Read all tasks from local voyage directory."""
+    task_dir = voyage_dir / ".claude" / "tasks" / voyage.task_list_id
+
+    if not task_dir.exists():
+        return []
+
+    tasks = []
+    for task_file in sorted(task_dir.glob("*.json")):
+        try:
+            data = json.loads(task_file.read_text())
+            tasks.append(Task.from_json(data))
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.error("Failed to parse task file %s: %s", task_file, e)
+
+    return tasks
+
+
+def _check_voyage_artifacts_local(voyage_dir: Path) -> tuple[bool, bool]:
+    """Check local voyage artifacts for status indicators.
+
+    Returns:
+        Tuple of (has_completion_marker, has_progress_file)
+    """
+    artifacts_dir = voyage_dir / "artifacts"
+    has_marker = (artifacts_dir / "voyage-complete.marker").exists()
+    has_progress = (artifacts_dir / "progress.txt").exists()
+    return has_marker, has_progress
+
+
+def derive_status_local(voyage: "Voyage", voyage_dir: Path) -> VoyageStatus:
+    """Derive full voyage status from local task list."""
+    tasks = list_tasks_local(voyage_dir, voyage)
+
+    if not tasks:
+        # No tasks - check artifacts for status
+        has_marker, has_progress = _check_voyage_artifacts_local(voyage_dir)
         if has_marker:
             inferred_state = VoyageState.COMPLETE
         elif has_progress:
