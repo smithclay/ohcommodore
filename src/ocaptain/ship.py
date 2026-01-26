@@ -266,3 +266,99 @@ def bootstrap_ship(
         # Ship is now ready - Claude will be launched via zellij from storage
 
     return ship
+
+
+def bootstrap_ship_new(
+    voyage: Voyage,
+    index: int,
+    tokens: dict[str, str] | None = None,
+    telemetry: bool = True,
+) -> tuple[VM, str]:
+    """Bootstrap a ship with Tailscale (new implementation).
+
+    Ships are tagged with tag:ocaptain-ship for ACL isolation.
+    Returns (ship_vm, ship_tailscale_ip).
+
+    Note: Will be renamed to bootstrap_ship in Task 10.
+    """
+    from .config import CONFIG
+
+    if tokens is None:
+        tokens = {}
+
+    provider = get_provider()
+    ship_id = f"ship-{index}"
+    ship_name = voyage.ship_name(index)
+
+    # Verify tailscale config
+    if not CONFIG.tailscale.oauth_secret:
+        raise ValueError("Tailscale OAuth secret required. Set OCAPTAIN_TAILSCALE_OAUTH_SECRET")
+    if not CONFIG.tailscale.ip:
+        raise ValueError("Tailscale IP not detected. Is Tailscale running?")
+
+    # 1. Create ship VM
+    ship = provider.create(ship_name)
+
+    with _get_connection(ship, provider) as c:
+        home = c.run("echo $HOME", hide=True).stdout.strip()
+
+        # 2. Bootstrap Tailscale with ACL tag isolation
+        ship_ts_ip = _bootstrap_tailscale(
+            c, ship_name, CONFIG.tailscale.oauth_secret, CONFIG.tailscale.ship_tag
+        )
+
+        # 3. Create directories for Mutagen sync target
+        c.run("mkdir -p ~/voyage/workspace ~/voyage/artifacts ~/voyage/logs")
+        c.run(f"mkdir -p ~/.claude/tasks/{voyage.task_list_id}")
+
+        # 4. Write ship identity
+        c.run("mkdir -p ~/.ocaptain/hooks")
+        c.put(BytesIO(ship_id.encode()), f"{home}/.ocaptain/ship_id")
+        c.put(BytesIO(voyage.id.encode()), f"{home}/.ocaptain/voyage_id")
+
+        # 5. Install expect script
+        expect_script = files("ocaptain.templates").joinpath("run_claude.exp").read_text()
+        c.put(BytesIO(expect_script.encode()), f"{home}/.ocaptain/run-claude.exp")
+        c.run("chmod +x ~/.ocaptain/run-claude.exp")
+
+        # 6. Configure Claude
+        c.run("mkdir -p ~/.claude")
+        c.run("echo '{\"hasCompletedOnboarding\":true}' > ~/.claude.json")
+        c.run("echo 'export LANG=C.UTF-8' >> ~/.bashrc")
+        c.run("echo 'export LC_CTYPE=C.UTF-8' >> ~/.bashrc")
+
+        env_vars = {"CLAUDE_CODE_TASK_LIST_ID": voyage.task_list_id}
+        if telemetry:
+            # Point OTLP directly to laptop via Tailscale
+            env_vars.update(
+                {
+                    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+                    "OTEL_METRICS_EXPORTER": "otlp",
+                    "OTEL_LOGS_EXPORTER": "otlp",
+                    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+                    "OTEL_EXPORTER_OTLP_ENDPOINT": f"http://{CONFIG.tailscale.ip}:{CONFIG.local.otlp_port}",
+                    "OTEL_RESOURCE_ATTRIBUTES": f"voyage.id={voyage.id},ship.id={ship_id}",
+                }
+            )
+
+        settings = {
+            "env": env_vars,
+            "hooks": {
+                "Stop": [
+                    {
+                        "matcher": "",
+                        "hooks": [
+                            {"type": "command", "command": f"{home}/.ocaptain/hooks/on-stop.sh"}
+                        ],
+                    }
+                ]
+            },
+        }
+        c.put(BytesIO(json.dumps(settings, indent=2).encode()), f"{home}/.claude/settings.json")
+
+        # 7. GitHub auth
+        if gh_token := tokens.get("GH_TOKEN"):
+            c.run(f"echo {shlex.quote(gh_token)} | gh auth login --with-token", hide=True)
+            c.run("gh auth setup-git", hide=True)
+
+    return ship, ship_ts_ip
