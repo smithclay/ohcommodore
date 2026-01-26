@@ -3,6 +3,7 @@
 import json
 import secrets
 import shlex
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from importlib.resources import files
@@ -12,7 +13,28 @@ from pathlib import Path
 from fabric import Connection
 
 from .config import CONFIG
-from .provider import VM, get_provider
+from .provider import VM, Provider, get_provider
+
+
+def _is_sprite_vm(vm: VM) -> bool:
+    """Check if a VM is a sprite (uses sprite:// URI scheme)."""
+    return vm.ssh_dest.startswith("sprite://")
+
+
+@contextmanager
+def _get_connection(vm: VM, provider: Provider):  # type: ignore[no-untyped-def]
+    """Get appropriate connection for a VM (Fabric or Sprite)."""
+    if _is_sprite_vm(vm):
+        from .providers.sprites import SpritesProvider
+
+        if isinstance(provider, SpritesProvider):
+            with provider.get_connection(vm) as c:
+                yield c
+        else:
+            raise ValueError(f"Sprite VM requires SpritesProvider, got {type(provider)}")
+    else:
+        with Connection(vm.ssh_dest) as c:
+            yield c
 
 
 @dataclass(frozen=True)
@@ -94,7 +116,10 @@ def sail(
     # 1. Provision storage VM
     storage = provider.create(voyage.storage_name)
 
-    with Connection(storage.ssh_dest) as c:
+    # For sprites, we need the chisel URL for ship-to-storage tunnels
+    storage_chisel_url: str | None = None
+
+    with _get_connection(storage, provider) as c:
         # Get home directory for SFTP operations (c.put doesn't expand ~)
         home = c.run("echo $HOME", hide=True).stdout.strip()
         voyage_dir = f"{home}/voyage"
@@ -106,6 +131,44 @@ def sail(
         # 2b. Set locale environment variables for proper UTF-8 handling
         c.run("echo 'export LANG=C.UTF-8' >> ~/.bashrc")
         c.run("echo 'export LC_CTYPE=C.UTF-8' >> ~/.bashrc")
+
+        # 2c. Set up chisel server for sprites (ships connect via tunnel)
+        if _is_sprite_vm(storage):
+            from .providers.sprites import SpritesProvider
+
+            # Install openssh-server and chisel
+            c.run(
+                "sudo apt-get update -qq && sudo apt-get install -y -qq openssh-server",
+                hide=True,
+            )
+            # Start sshd directly (systemd not available in sprites)
+            c.run("sudo /usr/sbin/sshd", hide=True, warn=True)
+
+            # Install chisel
+            arch_cmd = "$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
+            c.run(
+                f"curl -sL https://github.com/jpillora/chisel/releases/download/v1.10.1/"
+                f"chisel_1.10.1_linux_{arch_cmd}.gz | gunzip > /tmp/chisel && "
+                "sudo mv /tmp/chisel /usr/local/bin/chisel && "
+                "sudo chmod +x /usr/local/bin/chisel",
+                hide=True,
+            )
+
+            # Start chisel server (reverse mode, port 8080)
+            c.run(
+                "nohup chisel server --port 8080 --reverse "
+                f"> {voyage_dir}/logs/chisel-server.log 2>&1 &",
+                hide=True,
+            )
+
+            # Get public URL for ships to connect
+            if isinstance(provider, SpritesProvider):
+                storage_chisel_url = provider.get_public_url(storage)
+                # Write chisel URL for ships to read
+                c.put(
+                    BytesIO(storage_chisel_url.encode()),
+                    f"{voyage_dir}/chisel_url",
+                )
 
         # 3. Authenticate GitHub CLI if token provided (for private repos)
         if gh_token := tokens.get("GH_TOKEN"):
@@ -204,7 +267,9 @@ enabled = true
     failed_ships: list[tuple[int, Exception]] = []
     with ThreadPoolExecutor(max_workers=ships) as executor:
         futures = {
-            executor.submit(bootstrap_ship, voyage, storage, i, tokens, telemetry): i
+            executor.submit(
+                bootstrap_ship, voyage, storage, i, tokens, telemetry, storage_chisel_url
+            ): i
             for i in range(ships)
         }
 
@@ -242,6 +307,175 @@ enabled = true
     return voyage
 
 
+def sail_new(
+    prompt: str,
+    repo: str,
+    ships: int | None = None,
+    tokens: dict[str, str] | None = None,
+    spec_content: str | None = None,
+    verify_content: str | None = None,
+    tasks_dir: "Path | None" = None,
+    telemetry: bool = True,
+) -> Voyage:
+    """Launch a new voyage using local storage (new implementation).
+
+    1. Set up local voyage directory
+    2. Clone repository locally
+    3. Bootstrap ship VMs with Tailscale
+    4. Start Mutagen sync sessions
+    5. Launch local tmux session
+
+    Note: Will be renamed to sail() in Task 10.
+    """
+    import subprocess  # nosec: B404
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from .config import CONFIG
+    from .local_storage import setup_local_voyage
+    from .mutagen import create_sync
+    from .ship import bootstrap_ship_new
+
+    if tokens is None:
+        tokens = {}
+    ships = ships or CONFIG.default_ships
+    voyage = Voyage.create(prompt, repo, ships)
+
+    # Verify tailscale is ready
+    if not CONFIG.tailscale.ip:
+        raise RuntimeError("Tailscale IP not detected. Is Tailscale running?")
+    if not CONFIG.tailscale.oauth_secret:
+        raise RuntimeError("OCAPTAIN_TAILSCALE_OAUTH_SECRET not set")
+
+    # 1. Set up local voyage directory
+    voyage_dir = setup_local_voyage(voyage.id, voyage.task_list_id)
+
+    # 2. Clone repository locally
+    subprocess.run(  # nosec: B603, B607
+        ["gh", "repo", "clone", repo, str(voyage_dir / "workspace")],
+        check=True,
+    )
+    subprocess.run(  # nosec: B603, B607
+        ["git", "-C", str(voyage_dir / "workspace"), "checkout", "-b", voyage.branch],
+        check=True,
+    )
+
+    # 3. Write voyage.json locally
+    (voyage_dir / "voyage.json").write_text(voyage.to_json())
+
+    # 4. Write prompt.md locally
+    prompt_content = render_ship_prompt(voyage)
+    (voyage_dir / "prompt.md").write_text(prompt_content)
+
+    # 5. Write spec and verify if provided
+    if spec_content:
+        (voyage_dir / "artifacts" / "spec.md").write_text(spec_content)
+    if verify_content:
+        (voyage_dir / "artifacts" / "verify.sh").write_text(verify_content)
+        (voyage_dir / "artifacts" / "verify.sh").chmod(0o755)
+
+    # 6. Copy pre-created tasks if provided
+    if tasks_dir:
+        tasks_path = Path(tasks_dir)
+        task_dest = voyage_dir / ".claude" / "tasks" / voyage.task_list_id
+        for task_file in sorted(tasks_path.glob("*.json")):
+            task_data = json.loads(task_file.read_text())
+            if "metadata" in task_data:
+                task_data["metadata"]["voyage"] = voyage.id
+            (task_dest / task_file.name).write_text(json.dumps(task_data, indent=2))
+
+    # 7. Write stop hook locally
+    hook_content = render_stop_hook()
+    (voyage_dir / "on-stop.sh").write_text(hook_content)
+    (voyage_dir / "on-stop.sh").chmod(0o755)
+
+    # 8. Bootstrap ships with Tailscale
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    successful_ships: list[tuple[VM, str]] = []  # (vm, tailscale_ip)
+    failed_ships: list[tuple[int, Exception]] = []
+
+    with ThreadPoolExecutor(max_workers=ships) as executor:
+        futures = {
+            executor.submit(bootstrap_ship_new, voyage, i, tokens, telemetry): i
+            for i in range(ships)
+        }
+
+        for future in as_completed(futures):
+            ship_idx = futures[future]
+            try:
+                ship_vm, ship_ts_ip = future.result()
+                successful_ships.append((ship_vm, ship_ts_ip))
+            except Exception as e:
+                logger.warning("Ship-%d bootstrap failed: %s", ship_idx, e)
+                failed_ships.append((ship_idx, e))
+
+    if len(failed_ships) == ships:
+        raise RuntimeError(f"All {ships} ships failed to bootstrap")
+
+    # 9. Start Mutagen sync sessions
+    for ship_vm, ship_ts_ip in successful_ships:
+        ship_idx = int(ship_vm.name.split("ship")[-1])
+        session_name = f"{voyage.id}-ship-{ship_idx}"
+
+        # Sync workspace
+        create_sync(
+            local_path=voyage_dir / "workspace",
+            remote_user="ubuntu" if not _is_sprite_vm(ship_vm) else "sprite",
+            remote_host=ship_ts_ip,
+            remote_path="/home/ubuntu/voyage/workspace"
+            if not _is_sprite_vm(ship_vm)
+            else "/home/sprite/voyage/workspace",
+            session_name=f"{session_name}-workspace",
+        )
+
+        # Sync tasks
+        create_sync(
+            local_path=voyage_dir / ".claude" / "tasks" / voyage.task_list_id,
+            remote_user="ubuntu" if not _is_sprite_vm(ship_vm) else "sprite",
+            remote_host=ship_ts_ip,
+            remote_path=f"/home/ubuntu/.claude/tasks/{voyage.task_list_id}"
+            if not _is_sprite_vm(ship_vm)
+            else f"/home/sprite/.claude/tasks/{voyage.task_list_id}",
+            session_name=f"{session_name}-tasks",
+        )
+
+        # Copy prompt.md and on-stop.sh (one-time, not synced)
+        # These are copied via ssh since they don't need continuous sync
+        subprocess.run(  # nosec: B603, B607
+            [
+                "scp",
+                "-o",
+                "StrictHostKeyChecking=no",
+                str(voyage_dir / "prompt.md"),
+                f"ubuntu@{ship_ts_ip}:~/voyage/prompt.md",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(  # nosec: B603, B607
+            [
+                "scp",
+                "-o",
+                "StrictHostKeyChecking=no",
+                str(voyage_dir / "on-stop.sh"),
+                f"ubuntu@{ship_ts_ip}:~/.ocaptain/hooks/on-stop.sh",
+            ],
+            check=True,
+            capture_output=True,
+        )
+
+    # 10. Launch local tmux session
+    from .tmux import launch_fleet_new  # type: ignore[attr-defined]
+
+    ship_vms = [vm for vm, _ in successful_ships]
+    ship_vms.sort(key=lambda vm: int(vm.name.split("ship")[-1]))
+    launch_fleet_new(voyage, ship_vms, tokens)
+
+    return voyage
+
+
 def load_voyage(voyage_id: str) -> tuple[Voyage, VM]:
     """Load voyage from storage VM."""
     provider = get_provider()
@@ -254,7 +488,7 @@ def load_voyage(voyage_id: str) -> tuple[Voyage, VM]:
     if not storage:
         raise ValueError(f"Voyage not found: {voyage_id}")
 
-    with Connection(storage.ssh_dest) as c:
+    with _get_connection(storage, provider) as c:
         result = c.run("cat ~/voyage/voyage.json", hide=True)
         voyage = Voyage.from_json(result.stdout)
 
