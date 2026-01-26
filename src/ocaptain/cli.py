@@ -324,7 +324,12 @@ def sink(
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
 ) -> None:
     """Destroy voyage VMs (keeps storage by default)."""
+    from . import mutagen as mutagen_mod
     from . import tmux as tmux_mod
+
+    # Clean up Mutagen sessions before destroying VMs
+    if voyage_id:
+        mutagen_mod.terminate_voyage_syncs(voyage_id)
 
     if all_voyages:
         if not force:
@@ -357,6 +362,20 @@ def sink(
     else:
         console.print("[red]Specify voyage_id or --all[/red]")
         raise typer.Exit(1)
+
+
+@app.command()
+def telemetry_start() -> None:
+    """Start the local telemetry collector."""
+    script_path = Path(__file__).parent.parent.parent / "scripts" / "start-telemetry.sh"
+    subprocess.run([str(script_path)], check=True)  # nosec: B603, B607
+
+
+@app.command()
+def telemetry_stop() -> None:
+    """Stop the local telemetry collector."""
+    script_path = Path(__file__).parent.parent.parent / "scripts" / "stop-telemetry.sh"
+    subprocess.run([str(script_path)], check=True)  # nosec: B603, B607
 
 
 # Helper functions
