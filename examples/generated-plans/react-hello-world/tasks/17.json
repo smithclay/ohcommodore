@@ -1,0 +1,15 @@
+{
+  "id": "17",
+  "title": "Create README documentation",
+  "description": "Document project setup and installation. Explain component library usage. Include development workflow.\n\nFiles: README.md\n\nAcceptance: README has setup, usage, and contribution sections",
+  "status": "pending",
+  "blockedBy": ["15"],
+  "blocks": ["18", "20"],
+  "created": "2026-01-25T12:00:00Z",
+  "updated": "2026-01-25T12:00:00Z",
+  "metadata": {
+    "voyage": "voyage-react-hello-world",
+    "ship": "ship-1",
+    "repo": "octocat/Hello-World"
+  }
+}

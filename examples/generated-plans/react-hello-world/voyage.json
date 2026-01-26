@@ -1,0 +1,8 @@
+{
+  "name": "voyage-react-hello-world",
+  "repo": "octocat/Hello-World",
+  "recommended_ships": 8,
+  "max_parallel_width": 8,
+  "total_tasks": 20,
+  "created": "2026-01-25T12:00:00Z"
+}

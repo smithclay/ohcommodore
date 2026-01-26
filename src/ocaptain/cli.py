@@ -261,6 +261,60 @@ def shell(
 
 
 @app.command()
+def clone(
+    voyage_id: str | None = typer.Argument(None, help="Voyage ID (optional if only one active)"),
+    dest: str | None = typer.Option(None, "--dest", "-d", help="Destination directory"),
+) -> None:
+    """Clone the workspace from the remote storage vessel."""
+    # If no voyage_id, try to find the only active one
+    if not voyage_id:
+        provider = get_provider()
+        vms = provider.list(prefix="voyage-")
+        storage_vms = [vm for vm in vms if vm.name.endswith("-storage")]
+
+        if len(storage_vms) == 0:
+            console.print("[yellow]No voyages adrift to salvage from.[/yellow]")
+            raise typer.Exit(1)
+        elif len(storage_vms) > 1:
+            console.print(
+                "[yellow]Multiple voyages found. Specify which vessel to plunder:[/yellow]"
+            )
+            for vm in storage_vms:
+                vid = vm.name.replace("-storage", "")
+                console.print(f"  {vid}")
+            raise typer.Exit(1)
+        else:
+            voyage_id = storage_vms[0].name.replace("-storage", "")
+
+    voyage, storage = voyage_mod.load_voyage(voyage_id)
+
+    # Determine destination directory
+    repo_name = voyage.repo.split("/")[-1]
+    dest_dir = dest or f"{repo_name}-{voyage_id}"
+
+    if Path(dest_dir).exists():
+        console.print(f"[red]Destination already exists:[/red] {dest_dir}")
+        raise typer.Exit(1)
+
+    console.print(f"[dim]Hauling cargo from {storage.ssh_dest}...[/dim]")
+
+    # Clone via git using ssh
+    remote_path = f"{storage.ssh_dest}:voyage/workspace"
+    result = subprocess.run(  # nosec B603, B607
+        ["git", "clone", remote_path, dest_dir],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        console.print(f"[red]Failed to clone:[/red] {result.stderr}")
+        raise typer.Exit(1)
+
+    console.print(f"[green]✓[/green] Cargo secured at [bold]{dest_dir}[/bold]")
+    console.print(f"  Branch: {voyage.branch}")
+
+
+@app.command()
 def sink(
     voyage_id: str | None = typer.Argument(None, help="Voyage ID"),
     all_voyages: bool = typer.Option(False, "--all", help="Destroy ALL ocaptain VMs"),

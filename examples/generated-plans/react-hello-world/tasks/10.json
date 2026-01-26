@@ -1,0 +1,15 @@
+{
+  "id": "10",
+  "title": "Create Card Storybook stories",
+  "description": "Create stories showing slot usage. Document props with controls.\n\nFiles: src/components/Card/Card.stories.tsx\n\nAcceptance: Card appears in Storybook with examples",
+  "status": "pending",
+  "blockedBy": ["4", "8"],
+  "blocks": ["20"],
+  "created": "2026-01-25T12:00:00Z",
+  "updated": "2026-01-25T12:00:00Z",
+  "metadata": {
+    "voyage": "voyage-react-hello-world",
+    "ship": "ship-3",
+    "repo": "octocat/Hello-World"
+  }
+}

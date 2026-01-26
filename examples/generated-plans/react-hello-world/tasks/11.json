@@ -1,0 +1,15 @@
+{
+  "id": "11",
+  "title": "Create Input component",
+  "description": "Create controlled Input with label. Support error state and helper text.\n\nFiles: src/components/Input/Input.tsx, src/components/Input/Input.module.css, src/components/Input/index.ts\n\nAcceptance: Input handles controlled value changes",
+  "status": "pending",
+  "blockedBy": ["1", "2"],
+  "blocks": ["12", "13", "14"],
+  "created": "2026-01-25T12:00:00Z",
+  "updated": "2026-01-25T12:00:00Z",
+  "metadata": {
+    "voyage": "voyage-react-hello-world",
+    "ship": "ship-4",
+    "repo": "octocat/Hello-World"
+  }
+}

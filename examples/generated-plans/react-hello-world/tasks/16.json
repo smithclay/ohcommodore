@@ -1,0 +1,15 @@
+{
+  "id": "16",
+  "title": "Write App integration tests",
+  "description": "Test App renders without errors. Test component interactions work together.\n\nFiles: src/App.test.tsx\n\nAcceptance: App tests pass",
+  "status": "pending",
+  "blockedBy": ["3", "15"],
+  "blocks": ["20"],
+  "created": "2026-01-25T12:00:00Z",
+  "updated": "2026-01-25T12:00:00Z",
+  "metadata": {
+    "voyage": "voyage-react-hello-world",
+    "ship": "ship-0",
+    "repo": "octocat/Hello-World"
+  }
+}

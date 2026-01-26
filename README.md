@@ -33,9 +33,9 @@ You (local) → ocaptain sail → exe.dev VMs → Ships claim tasks → Code lan
 
 - Deploy parallel, autonomous Claude Code instances with one command in the cloud
 - No container complexity: full Linux VMs with SSH access
-- Observe remote parallel in real-time via tmux
+- Watch Claude Code sessions in real-time via tmux
 - Task-based coordination means no conflicts, no merge hell
-- Built-in OpenTelemetry observability (WIP)
+- Built-in OpenTelemetry observability (work-in-progress)
 
 ## Quickstart
 
@@ -62,12 +62,33 @@ uv sync
 export CLAUDE_CODE_OAUTH_TOKEN="your-token-here"
 export GH_TOKEN="ghp_xxxx"  # optional, for private repos
 ```
+### Make a plan
+
+At the moment, you need to use Claude Code to create a detailed dependency plan to pass to ocaptain.
+
+### Use an existing plan
+
+For convenience, two basic multi-agent plans are available in the `examples/generated-plans` directory.
+
+### Create a custom plan
+In Claude Code, run the following then restart:
+
+```bash
+    /plugin marketplace add smithclay/skills
+    /plugin install ocaptain-skills@smithclay-skills
+```
+
+You're now ready to generate a detailed plan in Claude Code using `/ocaptain-skills:voyage-plan`:
+
+```
+  Plan a voyage with ocaptain: take an empty repository and make a to-do list app.
+```
 
 ### Launch a voyage
 
 ```bash
-# From a plan directory (see Voyage Plans section)
-uv run ocaptain sail ./plans/my-feature
+# A plan is required, see "Make a plan" above
+uv run ocaptain sail ./examples/generated-plans/multilingual-readme
 
 # Monitor status
 uv run ocaptain status

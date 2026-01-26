@@ -1,0 +1,15 @@
+{
+  "id": "8",
+  "title": "Create Card component",
+  "description": "Create Card with header, body, footer slots. Support variant styles (elevated, outlined).\n\nFiles: src/components/Card/Card.tsx, src/components/Card/Card.module.css, src/components/Card/index.ts\n\nAcceptance: Card renders with all slot combinations",
+  "status": "pending",
+  "blockedBy": ["1", "2"],
+  "blocks": ["9", "10", "14"],
+  "created": "2026-01-25T12:00:00Z",
+  "updated": "2026-01-25T12:00:00Z",
+  "metadata": {
+    "voyage": "voyage-react-hello-world",
+    "ship": "ship-3",
+    "repo": "octocat/Hello-World"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "id": "13",
+  "title": "Create Input Storybook stories",
+  "description": "Show default, error, and disabled states. Document accessibility considerations.\n\nFiles: src/components/Input/Input.stories.tsx\n\nAcceptance: Input appears in Storybook",
+  "status": "pending",
+  "blockedBy": ["4", "11"],
+  "blocks": ["20"],
+  "created": "2026-01-25T12:00:00Z",
+  "updated": "2026-01-25T12:00:00Z",
+  "metadata": {
+    "voyage": "voyage-react-hello-world",
+    "ship": "ship-5",
+    "repo": "octocat/Hello-World"
+  }
+}

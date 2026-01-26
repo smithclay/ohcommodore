@@ -1,0 +1,15 @@
+{
+  "id": "15",
+  "title": "Build Hello World App page",
+  "description": "Create main App using Button, Card, Input components. Demonstrate component library usage.\n\nFiles: src/App.tsx, src/App.module.css\n\nAcceptance: App displays Hello World with styled components",
+  "status": "pending",
+  "blockedBy": ["14"],
+  "blocks": ["16", "17"],
+  "created": "2026-01-25T12:00:00Z",
+  "updated": "2026-01-25T12:00:00Z",
+  "metadata": {
+    "voyage": "voyage-react-hello-world",
+    "ship": "ship-0",
+    "repo": "octocat/Hello-World"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "id": "12",
+  "title": "Write Input component tests",
+  "description": "Test value changes. Test error state rendering. Test label association (accessibility).\n\nFiles: src/components/Input/Input.test.tsx\n\nAcceptance: All Input tests pass",
+  "status": "pending",
+  "blockedBy": ["3", "11"],
+  "blocks": ["20"],
+  "created": "2026-01-25T12:00:00Z",
+  "updated": "2026-01-25T12:00:00Z",
+  "metadata": {
+    "voyage": "voyage-react-hello-world",
+    "ship": "ship-4",
+    "repo": "octocat/Hello-World"
+  }
+}

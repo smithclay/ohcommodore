@@ -1,0 +1,15 @@
+{
+  "id": "4",
+  "title": "Install and configure Storybook",
+  "description": "Run npx storybook@latest init. Configure for Vite and TypeScript.\n\nFiles: .storybook/main.ts, .storybook/preview.ts\n\nAcceptance: npm run storybook launches Storybook UI",
+  "status": "pending",
+  "blockedBy": ["1"],
+  "blocks": ["7", "10", "13"],
+  "created": "2026-01-25T12:00:00Z",
+  "updated": "2026-01-25T12:00:00Z",
+  "metadata": {
+    "voyage": "voyage-react-hello-world",
+    "ship": "ship-1",
+    "repo": "octocat/Hello-World"
+  }
+}

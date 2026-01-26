@@ -1,0 +1,15 @@
+{
+  "id": "1",
+  "title": "Initialize React project with Vite and TypeScript",
+  "description": "Run npm create vite@latest . -- --template react-ts. Configure tsconfig.json with strict mode.\n\nFiles: package.json, tsconfig.json, vite.config.ts\n\nAcceptance: npm run dev starts dev server successfully",
+  "status": "pending",
+  "blockedBy": [],
+  "blocks": ["3", "4", "5", "8", "11"],
+  "created": "2026-01-25T12:00:00Z",
+  "updated": "2026-01-25T12:00:00Z",
+  "metadata": {
+    "voyage": "voyage-react-hello-world",
+    "ship": "ship-0",
+    "repo": "octocat/Hello-World"
+  }
+}

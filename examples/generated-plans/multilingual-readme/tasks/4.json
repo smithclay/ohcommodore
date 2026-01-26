@@ -1,0 +1,15 @@
+{
+  "id": "4",
+  "subject": "Create Japanese README (README.ja.md)",
+  "description": "Create a Japanese language README file for the Hello-World repository.\n\nFile: README.ja.md\n\nContent should include:\n- Japanese greeting: \"こんにちは世界！\" (Konnichiwa Sekai!)\n- Brief description in Japanese explaining this is a multilingual version\n- Link to the main README\n\nAcceptance: README.ja.md exists and contains valid UTF-8 Japanese text",
+  "activeForm": "Creating Japanese README",
+  "status": "pending",
+  "blocks": [
+    "6"
+  ],
+  "blockedBy": [],
+  "metadata": {
+    "voyage": "voyage-multilingual-readme",
+    "repo": "octocat/Hello-World"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "id": "5",
+  "title": "Create Button component",
+  "description": "Create reusable Button with variants (primary, secondary, outline). Include size props (sm, md, lg). Add proper TypeScript types.\n\nFiles: src/components/Button/Button.tsx, src/components/Button/Button.module.css, src/components/Button/index.ts\n\nAcceptance: Button renders with all variant/size combinations",
+  "status": "pending",
+  "blockedBy": ["1", "2"],
+  "blocks": ["6", "7", "14"],
+  "created": "2026-01-25T12:00:00Z",
+  "updated": "2026-01-25T12:00:00Z",
+  "metadata": {
+    "voyage": "voyage-react-hello-world",
+    "ship": "ship-2",
+    "repo": "octocat/Hello-World"
+  }
+}

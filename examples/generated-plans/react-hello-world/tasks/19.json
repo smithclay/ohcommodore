@@ -1,0 +1,15 @@
+{
+  "id": "19",
+  "title": "Configure CI-ready scripts",
+  "description": "Add typecheck script. Ensure all scripts return proper exit codes.\n\nFiles: package.json\n\nAcceptance: npm run lint && npm run typecheck && npm test && npm run build all pass",
+  "status": "pending",
+  "blockedBy": ["2", "3"],
+  "blocks": ["20"],
+  "created": "2026-01-25T12:00:00Z",
+  "updated": "2026-01-25T12:00:00Z",
+  "metadata": {
+    "voyage": "voyage-react-hello-world",
+    "ship": "ship-7",
+    "repo": "octocat/Hello-World"
+  }
+}

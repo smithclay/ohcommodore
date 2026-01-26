@@ -1,0 +1,15 @@
+{
+  "id": "2",
+  "title": "Configure ESLint and Prettier",
+  "description": "Install eslint, prettier, and React-specific plugins. Create .eslintrc.cjs and .prettierrc configs. Add lint scripts to package.json.\n\nFiles: .eslintrc.cjs, .prettierrc, package.json\n\nAcceptance: npm run lint runs without errors",
+  "status": "pending",
+  "blockedBy": [],
+  "blocks": ["5", "8", "11", "19"],
+  "created": "2026-01-25T12:00:00Z",
+  "updated": "2026-01-25T12:00:00Z",
+  "metadata": {
+    "voyage": "voyage-react-hello-world",
+    "ship": "ship-1",
+    "repo": "octocat/Hello-World"
+  }
+}

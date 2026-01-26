@@ -1,0 +1,15 @@
+{
+  "id": "14",
+  "title": "Create component library index",
+  "description": "Create barrel exports for all components. Set up proper module structure.\n\nFiles: src/components/index.ts\n\nAcceptance: import { Button, Card, Input } from './components' works",
+  "status": "pending",
+  "blockedBy": ["5", "8", "11"],
+  "blocks": ["15", "18"],
+  "created": "2026-01-25T12:00:00Z",
+  "updated": "2026-01-25T12:00:00Z",
+  "metadata": {
+    "voyage": "voyage-react-hello-world",
+    "ship": "ship-6",
+    "repo": "octocat/Hello-World"
+  }
+}

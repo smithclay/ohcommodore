@@ -1,0 +1,19 @@
+{
+  "id": "6",
+  "subject": "Verify all README files and run exit criteria",
+  "description": "Run the verification script to ensure all multilingual README files have been created correctly.\n\nFiles to verify:\n- README.es.md (Spanish)\n- README.fr.md (French)\n- README.de.md (German)\n- README.ja.md (Japanese)\n- README.pt-BR.md (Brazilian Portuguese)\n\nRun: bash verify.sh (or the equivalent checks)\n\nAcceptance: All files exist and contain valid UTF-8 encoded text in their respective languages",
+  "activeForm": "Verifying all README files",
+  "status": "pending",
+  "blocks": [],
+  "blockedBy": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5"
+  ],
+  "metadata": {
+    "voyage": "voyage-multilingual-readme",
+    "repo": "octocat/Hello-World"
+  }
+}

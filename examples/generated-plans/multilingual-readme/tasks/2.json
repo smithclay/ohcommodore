@@ -1,0 +1,15 @@
+{
+  "id": "2",
+  "subject": "Create French README (README.fr.md)",
+  "description": "Create a French language README file for the Hello-World repository.\n\nFile: README.fr.md\n\nContent should include:\n- French greeting: \"Bonjour le Monde!\"\n- Brief description in French explaining this is a multilingual version\n- Link to the main README\n\nAcceptance: README.fr.md exists and contains valid UTF-8 French text",
+  "activeForm": "Creating French README",
+  "status": "pending",
+  "blocks": [
+    "6"
+  ],
+  "blockedBy": [],
+  "metadata": {
+    "voyage": "voyage-multilingual-readme",
+    "repo": "octocat/Hello-World"
+  }
+}

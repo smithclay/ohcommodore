@@ -1,0 +1,15 @@
+{
+  "id": "1",
+  "subject": "Create Spanish README (README.es.md)",
+  "description": "Create a Spanish language README file for the Hello-World repository.\n\nFile: README.es.md\n\nContent should include:\n- Spanish greeting: \"¡Hola Mundo!\"\n- Brief description in Spanish explaining this is a multilingual version\n- Link to the main README\n\nAcceptance: README.es.md exists and contains valid UTF-8 Spanish text",
+  "activeForm": "Creating Spanish README",
+  "status": "pending",
+  "blocks": [
+    "6"
+  ],
+  "blockedBy": [],
+  "metadata": {
+    "voyage": "voyage-multilingual-readme",
+    "repo": "octocat/Hello-World"
+  }
+}

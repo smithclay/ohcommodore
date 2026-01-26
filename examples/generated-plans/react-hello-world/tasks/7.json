@@ -1,0 +1,15 @@
+{
+  "id": "7",
+  "title": "Create Button Storybook stories",
+  "description": "Create stories for all variants and sizes. Add controls for interactive props. Include documentation in MDX.\n\nFiles: src/components/Button/Button.stories.tsx, src/components/Button/Button.mdx\n\nAcceptance: Button appears in Storybook with working controls",
+  "status": "pending",
+  "blockedBy": ["4", "5"],
+  "blocks": ["20"],
+  "created": "2026-01-25T12:00:00Z",
+  "updated": "2026-01-25T12:00:00Z",
+  "metadata": {
+    "voyage": "voyage-react-hello-world",
+    "ship": "ship-1",
+    "repo": "octocat/Hello-World"
+  }
+}

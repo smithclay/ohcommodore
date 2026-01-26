@@ -1,0 +1,15 @@
+{
+  "id": "18",
+  "title": "Create component library documentation",
+  "description": "Document each component's API. Include usage examples.\n\nFiles: docs/COMPONENTS.md\n\nAcceptance: All components have documented props and examples",
+  "status": "pending",
+  "blockedBy": ["14", "17"],
+  "blocks": ["20"],
+  "created": "2026-01-25T12:00:00Z",
+  "updated": "2026-01-25T12:00:00Z",
+  "metadata": {
+    "voyage": "voyage-react-hello-world",
+    "ship": "ship-0",
+    "repo": "octocat/Hello-World"
+  }
+}
