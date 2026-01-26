@@ -7,7 +7,48 @@ from datetime import UTC, datetime
 from importlib.resources import files
 from pathlib import Path
 
-from .provider import VM, get_provider, is_sprite_vm
+from .provider import VM, Provider, get_connection, get_provider, is_sprite_vm
+
+
+def _get_remote_user(ship_vm: VM) -> str:
+    """Get the SSH user for a ship VM."""
+    return "sprite" if is_sprite_vm(ship_vm) else "ubuntu"
+
+
+def _get_remote_home(ship_vm: VM) -> str:
+    """Get the home directory path for a ship VM."""
+    user = _get_remote_user(ship_vm)
+    return f"/home/{user}"
+
+
+def _copy_file_to_ship(
+    local_path: Path,
+    remote_path: str,
+    ship_vm: VM,
+    ship_ts_ip: str,
+    provider: Provider,
+) -> None:
+    """Copy a file to a ship VM.
+
+    Uses SCP for exedev ships, SpriteConnection.put() for sprites.
+    """
+    import subprocess  # nosec: B404
+
+    if is_sprite_vm(ship_vm):
+        with get_connection(ship_vm, provider) as c:
+            c.put(local_path, remote_path)
+    else:
+        subprocess.run(  # nosec: B603, B607
+            [
+                "scp",
+                "-o",
+                "StrictHostKeyChecking=no",
+                str(local_path),
+                f"ubuntu@{ship_ts_ip}:{remote_path}",
+            ],
+            check=True,
+            capture_output=True,
+        )
 
 
 @dataclass(frozen=True)
@@ -151,56 +192,46 @@ def sail(
     if len(failed_ships) == ships:
         raise RuntimeError(f"All {ships} ships failed to bootstrap")
 
-    # 9. Start Mutagen sync sessions
+    # 9. Start Mutagen sync sessions and copy files
+    provider = get_provider()
     for ship_vm, ship_ts_ip in successful_ships:
         ship_idx = int(ship_vm.name.split("ship")[-1])
         session_name = f"{voyage.id}-ship-{ship_idx}"
+        remote_user = _get_remote_user(ship_vm)
+        remote_home = _get_remote_home(ship_vm)
 
         # Sync workspace
         create_sync(
             local_path=voyage_dir / "workspace",
-            remote_user="ubuntu" if not is_sprite_vm(ship_vm) else "sprite",
+            remote_user=remote_user,
             remote_host=ship_ts_ip,
-            remote_path="/home/ubuntu/voyage/workspace"
-            if not is_sprite_vm(ship_vm)
-            else "/home/sprite/voyage/workspace",
+            remote_path=f"{remote_home}/voyage/workspace",
             session_name=f"{session_name}-workspace",
         )
 
         # Sync tasks
         create_sync(
             local_path=voyage_dir / ".claude" / "tasks" / voyage.task_list_id,
-            remote_user="ubuntu" if not is_sprite_vm(ship_vm) else "sprite",
+            remote_user=remote_user,
             remote_host=ship_ts_ip,
-            remote_path=f"/home/ubuntu/.claude/tasks/{voyage.task_list_id}"
-            if not is_sprite_vm(ship_vm)
-            else f"/home/sprite/.claude/tasks/{voyage.task_list_id}",
+            remote_path=f"{remote_home}/.claude/tasks/{voyage.task_list_id}",
             session_name=f"{session_name}-tasks",
         )
 
         # Copy prompt.md and on-stop.sh (one-time, not synced)
-        # These are copied via ssh since they don't need continuous sync
-        subprocess.run(  # nosec: B603, B607
-            [
-                "scp",
-                "-o",
-                "StrictHostKeyChecking=no",
-                str(voyage_dir / "prompt.md"),
-                f"ubuntu@{ship_ts_ip}:~/voyage/prompt.md",
-            ],
-            check=True,
-            capture_output=True,
+        _copy_file_to_ship(
+            voyage_dir / "prompt.md",
+            f"{remote_home}/voyage/prompt.md",
+            ship_vm,
+            ship_ts_ip,
+            provider,
         )
-        subprocess.run(  # nosec: B603, B607
-            [
-                "scp",
-                "-o",
-                "StrictHostKeyChecking=no",
-                str(voyage_dir / "on-stop.sh"),
-                f"ubuntu@{ship_ts_ip}:~/.ocaptain/hooks/on-stop.sh",
-            ],
-            check=True,
-            capture_output=True,
+        _copy_file_to_ship(
+            voyage_dir / "on-stop.sh",
+            f"{remote_home}/.ocaptain/hooks/on-stop.sh",
+            ship_vm,
+            ship_ts_ip,
+            provider,
         )
 
     # 10. Launch local tmux session
