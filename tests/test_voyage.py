@@ -35,13 +35,6 @@ def test_voyage_json_roundtrip() -> None:
     assert restored.created_at == original.created_at
 
 
-def test_voyage_storage_name() -> None:
-    """Test storage VM naming."""
-    voyage = Voyage.create("Test", "owner/repo", 3)
-
-    assert voyage.storage_name == f"{voyage.id}-storage"
-
-
 def test_voyage_ship_name() -> None:
     """Test ship VM naming."""
     voyage = Voyage.create("Test", "owner/repo", 3)
@@ -56,4 +49,4 @@ def test_voyage_is_immutable() -> None:
     voyage = Voyage.create("Test", "owner/repo", 3)
 
     with pytest.raises(FrozenInstanceError):
-        voyage.prompt = "Modified"  # type: ignore[misc]
+        voyage.prompt = "Modified"
