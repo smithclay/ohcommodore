@@ -4,13 +4,8 @@ import shlex
 import subprocess  # nosec B404
 
 from .config import CONFIG
-from .provider import VM
+from .provider import VM, is_sprite_vm
 from .voyage import Voyage
-
-
-def _is_sprite_vm(vm: VM) -> bool:
-    """Check if a VM is a sprite (uses sprite:// URI scheme)."""
-    return vm.ssh_dest.startswith("sprite://")
 
 
 def _get_sprites_org() -> str:
@@ -22,7 +17,7 @@ def _get_sprites_org() -> str:
 
 def _build_ship_command(ship: VM, ship_id: str, voyage: Voyage, oauth_token: str) -> str:
     """Build the command to run Claude on a ship."""
-    if _is_sprite_vm(ship):
+    if is_sprite_vm(ship):
         return _build_sprite_ship_command(ship, ship_id, voyage, oauth_token)
     else:
         return _build_ssh_ship_command(ship, ship_id, voyage, oauth_token)

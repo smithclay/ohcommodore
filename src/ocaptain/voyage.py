@@ -7,12 +7,7 @@ from datetime import UTC, datetime
 from importlib.resources import files
 from pathlib import Path
 
-from .provider import VM, get_provider
-
-
-def _is_sprite_vm(vm: VM) -> bool:
-    """Check if a VM is a sprite (uses sprite:// URI scheme)."""
-    return vm.ssh_dest.startswith("sprite://")
+from .provider import VM, get_provider, is_sprite_vm
 
 
 @dataclass(frozen=True)
@@ -164,10 +159,10 @@ def sail(
         # Sync workspace
         create_sync(
             local_path=voyage_dir / "workspace",
-            remote_user="ubuntu" if not _is_sprite_vm(ship_vm) else "sprite",
+            remote_user="ubuntu" if not is_sprite_vm(ship_vm) else "sprite",
             remote_host=ship_ts_ip,
             remote_path="/home/ubuntu/voyage/workspace"
-            if not _is_sprite_vm(ship_vm)
+            if not is_sprite_vm(ship_vm)
             else "/home/sprite/voyage/workspace",
             session_name=f"{session_name}-workspace",
         )
@@ -175,10 +170,10 @@ def sail(
         # Sync tasks
         create_sync(
             local_path=voyage_dir / ".claude" / "tasks" / voyage.task_list_id,
-            remote_user="ubuntu" if not _is_sprite_vm(ship_vm) else "sprite",
+            remote_user="ubuntu" if not is_sprite_vm(ship_vm) else "sprite",
             remote_host=ship_ts_ip,
             remote_path=f"/home/ubuntu/.claude/tasks/{voyage.task_list_id}"
-            if not _is_sprite_vm(ship_vm)
+            if not is_sprite_vm(ship_vm)
             else f"/home/sprite/.claude/tasks/{voyage.task_list_id}",
             session_name=f"{session_name}-tasks",
         )

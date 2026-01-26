@@ -2,9 +2,14 @@
 
 from abc import abstractmethod
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
+    from typing import Any
 
 
 class VMStatus(str, Enum):
@@ -83,3 +88,29 @@ def get_provider(name: str | None = None) -> Provider:
         raise ValueError(f"Unknown provider: {name}. Available: {list(_PROVIDERS.keys())}")
 
     return _PROVIDERS[name]()
+
+
+def is_sprite_vm(vm: VM) -> bool:
+    """Check if a VM is a sprite (uses sprite:// URI scheme)."""
+    return vm.ssh_dest.startswith("sprite://")
+
+
+@contextmanager
+def get_connection(vm: VM, provider: Provider) -> "Generator[Any, None, None]":
+    """Get appropriate connection for a VM (Fabric or Sprite).
+
+    Yields a connection object with run() and put() methods.
+    """
+    if is_sprite_vm(vm):
+        from .providers.sprites import SpritesProvider
+
+        if isinstance(provider, SpritesProvider):
+            with provider.get_connection(vm) as c:
+                yield c
+        else:
+            raise ValueError(f"Sprite VM requires SpritesProvider, got {type(provider)}")
+    else:
+        from fabric import Connection
+
+        with Connection(vm.ssh_dest) as c:
+            yield c

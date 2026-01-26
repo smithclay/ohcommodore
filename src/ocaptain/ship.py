@@ -2,35 +2,13 @@
 
 import json
 import shlex
-from contextlib import contextmanager
 from importlib.resources import files
 from io import BytesIO
 
 from fabric import Connection
 
-from .provider import VM, Provider, get_provider
+from .provider import VM, get_connection, get_provider
 from .voyage import Voyage
-
-
-def _is_sprite_vm(vm: VM) -> bool:
-    """Check if a VM is a sprite (uses sprite:// URI scheme)."""
-    return vm.ssh_dest.startswith("sprite://")
-
-
-@contextmanager
-def _get_connection(vm: VM, provider: Provider):  # type: ignore[no-untyped-def]
-    """Get appropriate connection for a VM (Fabric or Sprite)."""
-    if _is_sprite_vm(vm):
-        from .providers.sprites import SpritesProvider
-
-        if isinstance(provider, SpritesProvider):
-            with provider.get_connection(vm) as c:
-                yield c
-        else:
-            raise ValueError(f"Sprite VM requires SpritesProvider, got {type(provider)}")
-    else:
-        with Connection(vm.ssh_dest) as c:
-            yield c
 
 
 def _bootstrap_tailscale(c: Connection, ship_name: str, oauth_secret: str, ship_tag: str) -> str:
@@ -92,7 +70,7 @@ def bootstrap_ship(
     # 1. Create ship VM
     ship = provider.create(ship_name)
 
-    with _get_connection(ship, provider) as c:
+    with get_connection(ship, provider) as c:
         home = c.run("echo $HOME", hide=True).stdout.strip()
 
         # 2. Bootstrap Tailscale with ACL tag isolation
