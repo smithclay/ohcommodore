@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-ocaptain is a lightweight multi-coding agent control plane.
+ocaptain is a lightweight multi-coding agent control plane using sprites.dev VMs, Tailscale mesh networking, and Mutagen file sync.
 
 ## Running Commands
 
@@ -10,20 +10,38 @@ Always use `uv run` to execute Python scripts and CLI commands (e.g., `uv run oc
 
 ## CLI Commands
 
-- `ocaptain sail -r <repo> "<prompt>"` - Launch a new voyage
+- `ocaptain sail <plan-dir>` - Launch a voyage from a plan directory
+  - `--ships, -n` - Override ship count
+  - `--no-telemetry` - Disable OTLP telemetry
 - `ocaptain status [voyage_id]` - Show voyage status
 - `ocaptain logs <voyage_id>` - View aggregated logs
 - `ocaptain tasks <voyage_id>` - Show task list
-- `ocaptain shell <voyage_id> <ship_id>` - SSH into a ship
-- `ocaptain sink <voyage_id>` - Destroy ships (keeps storage by default)
-  - `--include-storage, -s` - Also destroy storage VM
+- `ocaptain shell <voyage_id> [ship_id]` - Attach to ship's tmux session
+  - `--raw, -r` - Direct SSH instead of tmux
+- `ocaptain clone [voyage_id]` - Clone workspace from local voyage storage
+- `ocaptain sink <voyage_id>` - Destroy voyage VMs
   - `--all` - Destroy ALL ocaptain VMs
   - `--force, -f` - Skip confirmation
+- `ocaptain doctor` - Check system prerequisites
+- `ocaptain telemetry-start` - Start OTLP collector
+- `ocaptain telemetry-stop` - Stop OTLP collector
 
-### exe.dev Commands
+### sprites.dev Commands
 
-For debugging purposes, it can be helpful to look at infrastructure in exe.dev. All communication with exe.dev is done via SSH: see output of `ssh exe.dev help` for more info.
+Ships run on sprites.dev. Use `sprite` CLI for debugging:
+
+```bash
+sprite list -o <org>           # List sprites
+sprite exec -o <org> -s <name> # Run command on sprite
+```
+
+## Architecture
+
+- **Local Storage**: Voyages stored at `~/voyages/<voyage-id>/`
+- **Tailscale Mesh**: Ships join tailnet with ephemeral keys
+- **Mutagen Sync**: Two-way file sync between laptop and ships
+- **Autonomous Ships**: Claude runs in tmux on each ship
 
 ## Style and Voice
 
-Speak to the human and write all commits with a distiguished nautical / seafarer voice.
+Speak to the human and write all commits with a distinguished nautical / seafarer voice.
