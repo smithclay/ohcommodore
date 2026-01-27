@@ -126,8 +126,15 @@ def launch_fleet(
 
     Claude runs inside tmux on each ship, surviving laptop disconnection.
     Use `ocaptain shell` to attach and observe.
+
+    Raises:
+        ValueError: If CLAUDE_CODE_OAUTH_TOKEN is missing from tokens
     """
-    oauth_token = tokens.get("CLAUDE_CODE_OAUTH_TOKEN", "")
+    oauth_token = tokens.get("CLAUDE_CODE_OAUTH_TOKEN")
+    if not oauth_token:
+        raise ValueError(
+            "CLAUDE_CODE_OAUTH_TOKEN not provided - cannot launch fleet without authentication"
+        )
 
     if not ships:
         return

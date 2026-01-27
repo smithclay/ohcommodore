@@ -71,13 +71,17 @@ class SpriteConnection:
     def __exit__(self, *args: object) -> None:
         pass
 
-    def run(self, cmd: str, *, hide: bool = False, warn: bool = False) -> SpriteResult:
+    def run(
+        self, cmd: str, *, hide: bool = False, warn: bool = False, timeout: int | None = None
+    ) -> SpriteResult:
         """Run a command on the sprite via sprite exec.
 
         Args:
             cmd: Shell command to run
-            hide: If True, suppress output (ignored for SpriteResult, always captured)
+            hide: Accepted for API parity with Fabric Connection, but output is
+                  always captured (sprites don't support interactive output)
             warn: If True, don't raise on non-zero exit
+            timeout: Optional timeout in seconds for the command
 
         Returns:
             SpriteResult with stdout, stderr, and return_code
@@ -97,6 +101,7 @@ class SpriteConnection:
             capture_output=True,
             text=True,
             check=False,
+            timeout=timeout,
         )
 
         sprite_result = SpriteResult(
@@ -259,6 +264,9 @@ class SpritesProvider(Provider):
 
     def wait_ready(self, vm: VM, timeout: int = 300) -> bool:
         """Poll until sprite is accessible via exec."""
+        import logging
+
+        logger = logging.getLogger(__name__)
         start = time.time()
 
         while time.time() - start < timeout:
@@ -281,10 +289,12 @@ class SpritesProvider(Provider):
                 )
                 if result.returncode == 0 and "ready" in result.stdout:
                     return True
+            except KeyboardInterrupt:
+                raise
             except subprocess.TimeoutExpired:
-                pass
-            except Exception:  # nosec B110 - intentional retry loop
-                pass
+                logger.debug("Sprite %s exec timed out, retrying...", vm.name)
+            except Exception as e:
+                logger.debug("Sprite %s exec failed: %s, retrying...", vm.name, e)
 
             time.sleep(5)
 

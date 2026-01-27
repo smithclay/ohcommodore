@@ -451,8 +451,11 @@ def doctor() -> None:
                 "  [yellow]![/yellow] Mutagen daemon not running — run: mutagen daemon start"
             )
             all_ok = False
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass  # Already reported as missing tool
+    except subprocess.TimeoutExpired:
+        console.print("  [yellow]![/yellow] Mutagen daemon status check timed out")
+        all_ok = False
+    except FileNotFoundError:
+        pass  # Already reported as missing tool above
 
     # Check environment variables (already loaded from .env by CONFIG)
     console.print("\n[bold]Checking environment...[/bold]\n")

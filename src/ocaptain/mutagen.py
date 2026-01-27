@@ -1,7 +1,10 @@
 """Mutagen sync session management."""
 
+import logging
 import subprocess  # nosec: B404
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def ensure_ssh_config() -> None:
@@ -19,10 +22,13 @@ def ensure_ssh_config() -> None:
     key_path = Path.home() / ".config" / "ocaptain" / "id_ed25519"
 
     # SSH config block for ocaptain ships
+    # Uses Match with exec to only apply when our key exists, avoiding conflicts
+    # with other Tailscale uses on 100.* IPs
     # nosec: B106 - intentionally permissive for ephemeral VMs on Tailscale
     ocaptain_config = f"""
 # ocaptain ship connections (Tailscale IPs)
-Host 100.*
+# Only applies when ocaptain key exists to avoid interfering with other 100.* hosts
+Match originalhost 100.* exec "test -f {key_path}"
     Port 2222
     IdentityFile {key_path}
     StrictHostKeyChecking no
@@ -95,11 +101,22 @@ def create_sync(
 
 def terminate_sync(session_name: str) -> None:
     """Terminate a Mutagen sync session."""
-    subprocess.run(  # nosec: B603, B607
-        ["mutagen", "sync", "terminate", session_name],
-        check=False,
-        capture_output=True,
-    )
+    try:
+        result = subprocess.run(  # nosec: B603, B607
+            ["mutagen", "sync", "terminate", session_name],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            logger.debug(
+                "Mutagen terminate failed for %s (rc=%d): %s",
+                session_name,
+                result.returncode,
+                result.stderr.strip(),
+            )
+    except FileNotFoundError:
+        logger.warning("mutagen not found - cannot terminate sync session %s", session_name)
 
 
 def terminate_voyage_syncs(voyage_id: str) -> None:

@@ -199,7 +199,19 @@ def sail(
                 failed_ships.append((ship_idx, e))
 
     if len(failed_ships) == ships:
-        raise RuntimeError(f"All {ships} ships failed to bootstrap")
+        first_idx, first_error = failed_ships[0]
+        raise RuntimeError(
+            f"All {ships} ships failed to bootstrap. "
+            f"First failure (ship-{first_idx}): {first_error}"
+        )
+
+    if failed_ships:
+        logger.warning(
+            "Continuing with %d of %d ships (%d failed)",
+            len(successful_ships),
+            ships,
+            len(failed_ships),
+        )
 
     # 9. Start Mutagen sync sessions and copy files
     provider = get_provider()
@@ -269,11 +281,16 @@ def load_voyage(voyage_id: str) -> Voyage:
 
 def _tailscale_logout(vm: VM, provider: Provider) -> None:
     """Run tailscale logout on a VM to immediately remove from tailnet."""
+    import logging
+
+    logger = logging.getLogger(__name__)
     try:
         with get_connection(vm, provider) as c:
             c.run("sudo tailscale logout", hide=True, warn=True, timeout=10)
-    except Exception:  # nosec: B110 - best effort cleanup, VM may be unreachable
-        pass
+    except KeyboardInterrupt:
+        raise
+    except Exception as e:
+        logger.debug("Tailscale logout failed for %s: %s (VM may be unreachable)", vm.name, e)
 
 
 def sink(voyage_id: str) -> int:
