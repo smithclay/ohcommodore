@@ -25,6 +25,18 @@ def _bootstrap_tailscale(c: Connection, ship_name: str, oauth_secret: str, ship_
         hide=True,
     )
 
+    # Ensure tailscaled is running
+    c.run("sudo systemctl enable --now tailscaled", hide=True)
+
+    # Start system sshd on port 2222 for Tailscale access
+    # (exe.dev runs custom sshd on 22 that uses their proxy auth)
+    c.run(
+        "sudo bash -c 'echo Port 2222 > /etc/ssh/sshd_config.d/ocaptain.conf' && "
+        "sudo systemctl unmask ssh.socket ssh.service 2>/dev/null; "
+        "sudo systemctl enable --now ssh",
+        hide=True,
+    )
+
     # Join tailnet with OAuth secret + URL parameters for ephemeral/preauthorized
     # The OAuth secret acts as an auth key when used with ?ephemeral=true&preauthorized=true
     auth_key = f"{oauth_secret}?ephemeral=true&preauthorized=true"
@@ -131,5 +143,8 @@ def bootstrap_ship(
         if gh_token := tokens.get("GH_TOKEN"):
             c.run(f"echo {shlex.quote(gh_token)} | gh auth login --with-token", hide=True)
             c.run("gh auth setup-git", hide=True)
+
+        # 8. Install tmux for autonomous Claude sessions
+        c.run("sudo apt-get update -qq && sudo apt-get install -y -qq tmux", hide=True)
 
     return ship, ship_ts_ip

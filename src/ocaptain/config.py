@@ -40,11 +40,31 @@ class OcaptainConfig(BaseModel):
     local: LocalStorageConfig = LocalStorageConfig()
 
 
+def _find_tailscale() -> str | None:
+    """Find tailscale binary, including macOS app bundle."""
+    import shutil
+
+    # Check standard PATH
+    if path := shutil.which("tailscale"):
+        return path
+
+    # Check macOS app bundle
+    macos_path = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+    if Path(macos_path).exists():
+        return macos_path
+
+    return None
+
+
 def _get_tailscale_ip() -> str | None:
     """Auto-detect tailscale IP if available."""
+    tailscale = _find_tailscale()
+    if not tailscale:
+        return None
+
     try:
         result = subprocess.run(  # nosec: B603, B607
-            ["tailscale", "ip", "-4"],
+            [tailscale, "ip", "-4"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -57,8 +77,25 @@ def _get_tailscale_ip() -> str | None:
     return None
 
 
+def _load_dotenv_files() -> None:
+    """Load .env files into environment (cwd first, then ~/.config/ocaptain/.env)."""
+    from dotenv import load_dotenv
+
+    # Load in reverse priority order (later loads override earlier)
+    config_env = Path.home() / ".config" / "ocaptain" / ".env"
+    if config_env.exists():
+        load_dotenv(config_env, override=False)
+
+    cwd_env = Path.cwd() / ".env"
+    if cwd_env.exists():
+        load_dotenv(cwd_env, override=False)
+
+
 def load_config() -> OcaptainConfig:
     """Load config from file and environment."""
+
+    # Load .env files first
+    _load_dotenv_files()
 
     config_path = Path.home() / ".config" / "ocaptain" / "config.json"
 

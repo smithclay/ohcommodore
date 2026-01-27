@@ -2,27 +2,26 @@
 
 import os
 import subprocess  # nosec B404
-from pathlib import Path
+
+from .config import CONFIG  # Ensures .env files are loaded
 
 
 def load_tokens() -> dict[str, str]:
-    """Load tokens from env vars, falling back to .env file.
+    """Load tokens from environment (including .env files loaded by config).
 
     Returns dict with available tokens.
     CLAUDE_CODE_OAUTH_TOKEN is required (raises ValueError if missing).
     GH_TOKEN is optional.
     """
+    # Force config load to ensure .env files are processed
+    _ = CONFIG
+
     tokens: dict[str, str] = {}
 
     # Check for CLAUDE_CODE_OAUTH_TOKEN
     if claude_token := os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
         tokens["CLAUDE_CODE_OAUTH_TOKEN"] = claude_token
     else:
-        claude_token = _load_from_dotenv("CLAUDE_CODE_OAUTH_TOKEN")
-        if claude_token:
-            tokens["CLAUDE_CODE_OAUTH_TOKEN"] = claude_token
-
-    if "CLAUDE_CODE_OAUTH_TOKEN" not in tokens:
         raise ValueError(
             "CLAUDE_CODE_OAUTH_TOKEN is required. "
             "Set it in environment or in .env file (cwd or ~/.config/ocaptain/.env)"
@@ -31,55 +30,8 @@ def load_tokens() -> dict[str, str]:
     # Check for GH_TOKEN (optional)
     if gh_token := os.environ.get("GH_TOKEN"):
         tokens["GH_TOKEN"] = gh_token
-    else:
-        gh_token = _load_from_dotenv("GH_TOKEN")
-        if gh_token:
-            tokens["GH_TOKEN"] = gh_token
 
     return tokens
-
-
-def _load_from_dotenv(key: str) -> str | None:
-    """Load a single key from .env files (cwd, then ~/.config/ocaptain/.env)."""
-    dotenv_paths = [
-        Path.cwd() / ".env",
-        Path.home() / ".config" / "ocaptain" / ".env",
-    ]
-
-    for dotenv_path in dotenv_paths:
-        if dotenv_path.exists():
-            value = _parse_dotenv_key(dotenv_path, key)
-            if value:
-                return value
-
-    return None
-
-
-def _parse_dotenv_key(path: Path, key: str) -> str | None:
-    """Parse a single key from a .env file."""
-    try:
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                # Skip comments and empty lines
-                if not line or line.startswith("#"):
-                    continue
-                # Parse KEY=value
-                if "=" in line:
-                    k, _, v = line.partition("=")
-                    k = k.strip()
-                    v = v.strip()
-                    # Remove quotes if present
-                    if (v.startswith('"') and v.endswith('"')) or (
-                        v.startswith("'") and v.endswith("'")
-                    ):
-                        v = v[1:-1]
-                    if k == key:
-                        return v
-    except OSError:
-        pass
-
-    return None
 
 
 def validate_repo_access(repo: str, gh_token: str | None = None) -> None:

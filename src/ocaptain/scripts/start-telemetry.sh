@@ -4,6 +4,19 @@ set -e
 CONFIG_DIR="$HOME/.config/ocaptain"
 VOYAGES_DIR="$HOME/voyages"
 
+# Find tailscale binary (handles macOS app bundle)
+find_tailscale() {
+    if command -v tailscale &>/dev/null; then
+        echo "tailscale"
+    elif [ -x "/Applications/Tailscale.app/Contents/MacOS/Tailscale" ]; then
+        echo "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+    else
+        echo "ERROR: tailscale not found" >&2
+        exit 1
+    fi
+}
+TAILSCALE=$(find_tailscale)
+
 echo "Starting ocaptain telemetry collector..."
 
 # Create directories
@@ -44,10 +57,10 @@ echo $! > "$CONFIG_DIR/otlp2parquet.pid"
 
 # Expose via Tailscale
 echo "Exposing OTLP via Tailscale..."
-tailscale serve --bg --tcp 4318 tcp://127.0.0.1:4318
+$TAILSCALE serve --bg --tcp 4318 tcp://127.0.0.1:4318
 
 # Get tailscale IP
-TAILSCALE_IP=$(tailscale ip -4)
+TAILSCALE_IP=$($TAILSCALE ip -4)
 echo ""
 echo "=== Telemetry collector ready ==="
 echo "OTLP endpoint: http://$TAILSCALE_IP:4318"

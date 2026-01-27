@@ -243,32 +243,30 @@ def tasks(
 @app.command()
 def shell(
     voyage_id: str = typer.Argument(..., help="Voyage ID"),
-    ship_id: str | None = typer.Argument(None, help="Ship ID to focus (e.g., ship-0)"),
+    ship_id: str = typer.Argument("ship-0", help="Ship ID (e.g., ship-0)"),
     raw: bool = typer.Option(False, "--raw", "-r", help="SSH directly to ship instead of tmux"),
 ) -> None:
-    """Attach to voyage's tmux session to observe ships."""
-    from . import tmux as tmux_mod
-
+    """Attach to a ship's tmux session to observe Claude."""
     # Verify voyage exists
     voyage_mod.load_voyage(voyage_id)
 
-    if raw and ship_id:
+    provider = get_provider()
+    idx = _parse_ship_index(ship_id)
+    ship_name = f"{voyage_id}-ship{idx}"
+    vm = next((v for v in provider.list() if v.name == ship_name), None)
+
+    if not vm:
+        console.print(f"[red]Ship not found: {ship_name}[/red]")
+        raise typer.Exit(1)
+
+    if raw:
         # Direct SSH to ship (for debugging)
-        provider = get_provider()
-        idx = _parse_ship_index(ship_id)
-        ship_name = f"{voyage_id}-ship{idx}"
-        vm = next((v for v in provider.list() if v.name == ship_name), None)
-
-        if not vm:
-            console.print(f"[red]Ship not found: {ship_name}[/red]")
-            raise typer.Exit(1)
-
         subprocess.run(["ssh", vm.ssh_dest])  # nosec: B603, B607
     else:
-        # Attach to local tmux session
-        focus_pane = _parse_ship_index(ship_id) if ship_id else None
-        cmd = tmux_mod.attach_session(voyage_id, focus_pane)
-        subprocess.run(cmd)  # nosec: B603, B607
+        # Attach to ship's tmux session where Claude is running
+        subprocess.run(  # nosec: B603, B607
+            ["ssh", "-tt", vm.ssh_dest, "tmux", "attach", "-t", "claude"]
+        )
 
 
 @app.command()
@@ -351,12 +349,6 @@ def sink(
         # Clean up Mutagen sessions
         mutagen_mod.terminate_voyage_syncs(voyage_id)
 
-        # Kill local tmux session
-        subprocess.run(  # nosec B603, B607
-            ["tmux", "kill-session", "-t", voyage_id],
-            capture_output=True,
-        )
-
         if not force:
             confirm = typer.confirm(f"Destroy all VMs for {voyage_id}?")
             if not confirm:
@@ -366,6 +358,129 @@ def sink(
         console.print(f"[green]✓[/green] Destroyed {count} VMs.")
     else:
         console.print("[red]Specify voyage_id or --all[/red]")
+        raise typer.Exit(1)
+
+
+def _find_tool(name: str) -> str | None:
+    """Find a tool, including macOS app bundles."""
+    import shutil
+
+    # Try standard PATH first
+    path = shutil.which(name)
+    if path:
+        return path
+
+    # Check macOS app bundle locations
+    if name == "tailscale":
+        macos_paths = [
+            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+            "/usr/local/bin/tailscale",
+        ]
+        for p in macos_paths:
+            if Path(p).exists():
+                return p
+
+    return None
+
+
+@app.command()
+def doctor() -> None:
+    """Check system prerequisites and configuration."""
+    import os
+
+    # CONFIG import ensures .env files are loaded
+    _ = CONFIG
+
+    all_ok = True
+
+    console.print("\n[bold]Checking prerequisites...[/bold]\n")
+
+    # Check tools
+    tools = [
+        ("tailscale", "brew install tailscale (or https://tailscale.com/download)"),
+        ("mutagen", "brew install mutagen-io/mutagen/mutagen"),
+        ("otlp2parquet", "cargo install otlp2parquet (or GitHub releases)"),
+    ]
+
+    for tool, install_hint in tools:
+        if _find_tool(tool):
+            console.print(f"  [green]✓[/green] {tool}")
+        else:
+            console.print(f"  [red]✗[/red] {tool} — {install_hint}")
+            all_ok = False
+
+    # Check tailscale connection
+    console.print()
+    tailscale_path = _find_tool("tailscale")
+    try:
+        result = subprocess.run(  # nosec B603, B607
+            [tailscale_path or "tailscale", "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            import json as json_mod
+
+            ts_status = json_mod.loads(result.stdout)
+            if ts_status.get("Self", {}).get("Online"):
+                ts_ip = ts_status.get("Self", {}).get("TailscaleIPs", ["?"])[0]
+                console.print(f"  [green]✓[/green] Tailscale connected ({ts_ip})")
+            else:
+                console.print("  [red]✗[/red] Tailscale not connected — run: tailscale up")
+                all_ok = False
+        else:
+            console.print("  [red]✗[/red] Tailscale not running — run: tailscale up")
+            all_ok = False
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        console.print("  [red]✗[/red] Tailscale not available")
+        all_ok = False
+
+    # Check mutagen daemon
+    try:
+        result = subprocess.run(  # nosec B603, B607
+            ["mutagen", "daemon", "status"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if "running" in result.stdout.lower() or result.returncode == 0:
+            console.print("  [green]✓[/green] Mutagen daemon running")
+        else:
+            console.print(
+                "  [yellow]![/yellow] Mutagen daemon not running — run: mutagen daemon start"
+            )
+            all_ok = False
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass  # Already reported as missing tool
+
+    # Check environment variables (already loaded from .env by CONFIG)
+    console.print("\n[bold]Checking environment...[/bold]\n")
+
+    env_vars = [
+        ("OCAPTAIN_TAILSCALE_OAUTH_SECRET", True),
+        ("CLAUDE_CODE_OAUTH_TOKEN", True),
+        ("GH_TOKEN", False),  # Optional
+    ]
+
+    for var, required in env_vars:
+        value = os.environ.get(var)
+
+        if value:
+            masked = value[:12] + "..." if len(value) > 15 else "***"
+            console.print(f"  [green]✓[/green] {var} ({masked})")
+        elif required:
+            console.print(f"  [red]✗[/red] {var} — required")
+            all_ok = False
+        else:
+            console.print(f"  [yellow]![/yellow] {var} — optional, not set")
+
+    # Summary
+    console.print()
+    if all_ok:
+        console.print("[green]All systems ready. You may set sail![/green]")
+    else:
+        console.print("[red]Some issues found. Please address them before sailing.[/red]")
         raise typer.Exit(1)
 
 
