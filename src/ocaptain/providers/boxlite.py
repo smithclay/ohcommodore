@@ -12,6 +12,8 @@ Requirements:
 from __future__ import annotations
 
 import asyncio
+import logging
+import shlex
 import time
 from typing import TYPE_CHECKING
 
@@ -19,6 +21,8 @@ from fabric import Connection
 
 from ..config import CONFIG, get_ssh_keypair
 from ..provider import VM, Provider, VMStatus, register_provider
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import boxlite as boxlite_module
@@ -49,6 +53,11 @@ class BoxLiteProvider(Provider):
         self._loop = asyncio.new_event_loop()
         self._config = CONFIG.providers.get("boxlite", {})
 
+    def __del__(self) -> None:
+        """Cleanup event loop on provider destruction."""
+        if hasattr(self, "_loop") and self._loop and not self._loop.is_closed():
+            self._loop.close()
+
     def create(self, name: str, *, wait: bool = True) -> VM:
         """Create a new BoxLite VM."""
         return self._loop.run_until_complete(self._create(name, wait))
@@ -61,27 +70,43 @@ class BoxLiteProvider(Provider):
         box = boxlite.SimpleBox(image)
         await box.__aenter__()
 
-        self._boxes[name] = box
+        try:
+            self._boxes[name] = box
 
-        # Bootstrap: install Tailscale, SSH, get IP
-        await self._bootstrap_vm(box, name)
+            # Bootstrap: install Tailscale, SSH, get IP
+            await self._bootstrap_vm(box, name)
 
-        # Get Tailscale IP
-        result = await box.exec("tailscale", "ip", "-4")
-        ts_ip = result.stdout.strip()
+            # Get Tailscale IP
+            result = await box.exec("tailscale", "ip", "-4")
+            ts_ip = result.stdout.strip()
 
-        vm = VM(
-            id=name,
-            name=name,
-            ssh_dest=f"ubuntu@{ts_ip}",
-            status=VMStatus.RUNNING,
-        )
-        self._vms[name] = vm
+            if not ts_ip:
+                raise RuntimeError(
+                    f"Tailscale did not return an IP for {name}. VM may not have joined tailnet."
+                )
 
-        if wait and not self.wait_ready(vm):
-            raise TimeoutError(f"VM {name} did not become SSH-accessible")
+            vm = VM(
+                id=name,
+                name=name,
+                ssh_dest=f"ubuntu@{ts_ip}",
+                status=VMStatus.RUNNING,
+            )
+            self._vms[name] = vm
 
-        return vm
+            if wait and not self.wait_ready(vm):
+                raise TimeoutError(f"VM {name} did not become SSH-accessible")
+
+            return vm
+        except Exception:
+            # Cleanup on failure
+            logger.warning("VM creation failed for %s, cleaning up...", name)
+            try:
+                await box.__aexit__(None, None, None)
+            except Exception as cleanup_error:
+                logger.error("Failed to cleanup box %s: %s", name, cleanup_error)
+            self._boxes.pop(name, None)
+            self._vms.pop(name, None)
+            raise
 
     async def _bootstrap_vm(self, box: object, name: str) -> None:
         """Bootstrap VM with Tailscale and SSH."""
@@ -105,7 +130,8 @@ class BoxLiteProvider(Provider):
         _, public_key = get_ssh_keypair()
         await box_exec("mkdir", "-p", "/home/ubuntu/.ssh")
         pub_key = public_key.strip()
-        await box_exec("bash", "-c", f"echo '{pub_key}' >> /home/ubuntu/.ssh/authorized_keys")
+        ssh_key_cmd = f"echo {shlex.quote(pub_key)} >> /home/ubuntu/.ssh/authorized_keys"
+        await box_exec("bash", "-c", ssh_key_cmd)
         await box_exec("chown", "-R", "ubuntu:ubuntu", "/home/ubuntu/.ssh")
         await box_exec("chmod", "700", "/home/ubuntu/.ssh")
         await box_exec("chmod", "600", "/home/ubuntu/.ssh/authorized_keys")
@@ -132,6 +158,9 @@ class BoxLiteProvider(Provider):
             f"--advertise-tags={ship_tag}",
         )
 
+        # Install Claude Code
+        await box_exec("bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash")
+
     def destroy(self, vm_id: str) -> None:
         """Destroy a BoxLite VM."""
         if vm_id not in self._boxes:
@@ -140,13 +169,13 @@ class BoxLiteProvider(Provider):
 
     async def _destroy(self, vm_id: str) -> None:
         """Async implementation of destroy."""
-        import contextlib
-
         box = self._boxes[vm_id]
         box_exec = box.exec  # type: ignore[attr-defined]
 
-        with contextlib.suppress(Exception):
+        try:
             await box_exec("tailscale", "logout")
+        except Exception as e:
+            logger.warning("Failed to logout from Tailscale during VM %s destruction: %s", vm_id, e)
 
         await box.__aexit__(None, None, None)  # type: ignore[attr-defined]
         del self._boxes[vm_id]
@@ -171,6 +200,8 @@ class BoxLiteProvider(Provider):
                 with Connection(vm.ssh_dest, connect_timeout=5) as c:
                     c.run("echo ready", hide=True)
                 return True
+            except KeyboardInterrupt:
+                raise
             except Exception:
                 time.sleep(2)
         return False
