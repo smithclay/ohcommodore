@@ -165,3 +165,48 @@ def test_boxlite_provider_create_starts_vm() -> None:
         assert vm.name == "test-ship"
         assert vm.id == "test-ship"
         assert "100.64" in vm.ssh_dest or "ubuntu@" in vm.ssh_dest
+
+
+def test_boxlite_provider_destroy_removes_vm() -> None:
+    """destroy() should stop the box and remove from tracking."""
+    from unittest.mock import AsyncMock
+
+    mock_boxlite = MagicMock()
+
+    with patch.dict("sys.modules", {"boxlite": mock_boxlite}):
+        from ocaptain.provider import VM, VMStatus
+        from ocaptain.providers.boxlite import BoxLiteProvider
+
+        provider = BoxLiteProvider()
+
+        # Manually add a VM and box
+        mock_box = MagicMock()
+        mock_box.__aexit__ = AsyncMock(return_value=None)
+
+        async def mock_exec(*args: str) -> MagicMock:
+            return MagicMock(stdout="")
+
+        mock_box.exec = mock_exec
+
+        provider._boxes["test-vm"] = mock_box
+        provider._vms["test-vm"] = VM(
+            id="test-vm",
+            name="test-vm",
+            ssh_dest="ubuntu@100.64.1.1",
+            status=VMStatus.RUNNING,
+        )
+
+        provider.destroy("test-vm")
+
+        assert "test-vm" not in provider._vms
+        assert "test-vm" not in provider._boxes
+
+
+def test_boxlite_provider_destroy_nonexistent_noop() -> None:
+    """destroy() should be a no-op for nonexistent VMs."""
+    with patch.dict("sys.modules", {"boxlite": MagicMock()}):
+        from ocaptain.providers.boxlite import BoxLiteProvider
+
+        provider = BoxLiteProvider()
+        # Should not raise
+        provider.destroy("nonexistent")
