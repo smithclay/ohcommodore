@@ -478,6 +478,16 @@ def doctor() -> None:
         else:
             console.print(f"  [yellow]![/yellow] {var} — optional, not set")
 
+    # Check optional providers
+    console.print("\n[bold]Optional providers:[/bold]\n")
+
+    try:
+        import boxlite  # noqa: F401
+
+        console.print("  [green]✓[/green] boxlite (local micro-VMs)")
+    except ImportError:
+        console.print("  [dim]○[/dim] boxlite not installed (pip install ocaptain\\[boxlite])")
+
     # Summary
     console.print()
     if all_ok:
