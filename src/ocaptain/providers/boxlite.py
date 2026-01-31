@@ -116,9 +116,8 @@ class BoxLiteProvider(Provider):
         await run("apt-get", "update")
         await run("apt-get", "install", "-y", "openssh-server", "curl", "sudo")
 
-        # Configure sshd on port 2222
+        # Configure sshd on default port 22
         await run("mkdir", "-p", "/run/sshd")
-        await run("sed", "-i", "s/#Port 22/Port 2222/", "/etc/ssh/sshd_config")
         await run("/usr/sbin/sshd")
 
         # Create ubuntu user if needed and setup SSH
