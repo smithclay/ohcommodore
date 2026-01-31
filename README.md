@@ -2,13 +2,17 @@
 
 [![PyPI](https://img.shields.io/pypi/v/ocaptain.svg)](https://pypi.org/project/ocaptain/)
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/)
-[![sprites.dev](https://img.shields.io/badge/Powered%20by-sprites.dev-purple.svg)](https://sprites.dev)
 
 > O Captain! my Captain! our fearful Claude Code session is done, The repo has weather'd every rack, the prize we sought is won.
 
-Minimalist multi-coding agent control plane built on [sprites.dev](https://sprites.dev) VMs with [Tailscale](https://tailscale.com) mesh networking. Orchestration is managed by Claude Code's built-in [task list](https://x.com/trq212/status/2014480496013803643?s=20) feature: work is distributed by the `ocaptain` CLI to cloud VMs ("ships") that work in parallel on a plan you generate with Claude.
+Minimalist multi-coding agent control plane with [Tailscale](https://tailscale.com) mesh networking. Orchestration is managed by Claude Code's built-in [task list](https://x.com/trq212/status/2014480496013803643?s=20) feature: work is distributed by the `ocaptain` CLI to VMs ("ships") that work in parallel on a plan you generate with Claude.
 
-No Kubernetes, no local sandboxes, no containers, no asking for permissions.
+Ships can be provisioned on multiple backends:
+- **[sprites.dev](https://sprites.dev)** — Cloud VMs with instant provisioning
+- **[exe.dev](https://exe.dev)** — Alternative cloud VM provider
+- **[BoxLite](https://github.com/anthropics/boxlite)** — Local micro-VMs for development (sub-second boot)
+
+No Kubernetes, no containers, no asking for permissions.
 
 ## Table of Contents
 
@@ -23,10 +27,10 @@ No Kubernetes, no local sandboxes, no containers, no asking for permissions.
 
 ## What it does
 
-Provisions a fleet of VMs on sprites.dev, each running an autonomous Claude Code agent. Ships sync files via Mutagen and coordinate through a shared task list—no central scheduler, just agents racing to complete work.
+Provisions a fleet of VMs (cloud or local), each running an autonomous Claude Code agent. Ships sync files via Mutagen and coordinate through a shared task list—no central scheduler, just agents racing to complete work.
 
 ```
-You (local) → ocaptain sail → sprites.dev VMs → Ships claim tasks → Code syncs back
+You (local) → ocaptain sail → Ship VMs → Ships claim tasks → Code syncs back
 ```
 
 ## Why?
@@ -42,7 +46,10 @@ You (local) → ocaptain sail → sprites.dev VMs → Ships claim tasks → Code
 
 ### Prerequisites
 
-1. [sprites.dev](https://sprites.dev) account with `sprite` CLI installed or [exe.dev](https://exe.dev) account.
+1. **VM Provider** (choose one):
+   - [sprites.dev](https://sprites.dev) account with `sprite` CLI installed
+   - [exe.dev](https://exe.dev) account
+   - [BoxLite](https://github.com/anthropics/boxlite) for local micro-VMs (`pip install ocaptain[boxlite]`)
 2. [Tailscale](https://tailscale.com) installed and running
 3. [Mutagen](https://mutagen.io) installed (`brew install mutagen-io/mutagen/mutagen`)
 4. Claude Code long-lived OAuth token (subscription required, from `claude setup-token`)
@@ -67,8 +74,9 @@ export CLAUDE_CODE_OAUTH_TOKEN="your-token-here"
 # Tailscale OAuth secret (for ephemeral ship auth keys)
 export OCAPTAIN_TAILSCALE_OAUTH_SECRET="tskey-client-xxxx"
 
-# sprites.dev org
-export OCAPTAIN_SPRITES_ORG="your-org"
+# Provider-specific (choose one):
+export OCAPTAIN_SPRITES_ORG="your-org"     # For sprites.dev
+export OCAPTAIN_PROVIDER="boxlite"          # For local BoxLite VMs
 
 # Optional: GitHub token for private repos
 export GH_TOKEN="ghp_xxxx"
@@ -139,7 +147,7 @@ flowchart TB
         TS[100.x.x.x]
     end
 
-    subgraph Sprites["sprites.dev or exe.dev"]
+    subgraph Provider["VM Provider"]
         subgraph Fleet["Ship VMs"]
             S0[Ship 0<br/>Claude Code]
             S1[Ship 1<br/>Claude Code]
@@ -153,12 +161,17 @@ flowchart TB
     S0 & S1 & S2 -->|tmux sessions| CLI
 ```
 
+**Supported Providers:**
+- `sprites` — sprites.dev cloud VMs (default)
+- `exedev` — exe.dev cloud VMs
+- `boxlite` — Local micro-VMs for development
+
 ### Components
 
 | Component | Description |
 |-----------|-------------|
 | **Local Voyages** | `~/voyages/<voyage-id>/` contains workspace, tasks, logs, and artifacts |
-| **Ship VMs** | sprites.dev VMs running Claude Code autonomously in tmux sessions |
+| **Ship VMs** | VMs (cloud or local) running Claude Code autonomously in tmux sessions |
 | **Tailscale Mesh** | Ships join tailnet with ephemeral keys for direct connectivity |
 | **Mutagen Sync** | Two-way file sync between laptop and ships (workspace + tasks) |
 | **Task List** | Shared JSON files in `~/.claude/tasks/`. Ships race to claim pending tasks |
@@ -279,11 +292,14 @@ ocaptain telemetry-stop
 |----------|----------|-------------|
 | `CLAUDE_CODE_OAUTH_TOKEN` | Yes | Claude Code authentication token |
 | `OCAPTAIN_TAILSCALE_OAUTH_SECRET` | Yes | Tailscale OAuth secret for ephemeral keys |
-| `OCAPTAIN_SPRITES_ORG` | Yes | sprites.dev organization name |
+| `OCAPTAIN_PROVIDER` | No | VM provider: `sprites`, `exedev`, or `boxlite` (default: `sprites`) |
+| `OCAPTAIN_SPRITES_ORG` | Yes* | sprites.dev organization name (*required for sprites provider) |
 | `GH_TOKEN` | No | GitHub token for private repos |
 | `OCAPTAIN_DEFAULT_SHIPS` | No | Default ship count (default: `3`) |
 
-### sprites.dev Setup
+### Provider Setup
+
+#### sprites.dev (default)
 
 Install the `sprite` CLI and authenticate:
 
@@ -294,6 +310,25 @@ sprite list -o your-org
 # Create a test sprite
 sprite create -o your-org test-sprite
 ```
+
+#### BoxLite (local development)
+
+BoxLite runs hardware-isolated micro-VMs locally with sub-second boot times. Ideal for testing and development without cloud costs.
+
+```bash
+# Install with BoxLite support
+pip install ocaptain[boxlite]
+
+# Or with uv
+uv pip install ocaptain[boxlite]
+
+# Set provider
+export OCAPTAIN_PROVIDER="boxlite"
+```
+
+**Requirements:**
+- macOS 12+ or Linux with KVM
+- Tailscale running locally
 
 ### Tailscale Setup
 

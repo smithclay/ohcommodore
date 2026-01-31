@@ -2,7 +2,10 @@
 
 ## Project Overview
 
-ocaptain is a lightweight multi-coding agent control plane using sprites.dev VMs, Tailscale mesh networking, and Mutagen file sync.
+ocaptain is a lightweight multi-coding agent control plane using Tailscale mesh networking and Mutagen file sync. Ships (VMs running Claude Code) can be provisioned on multiple backends:
+- **sprites.dev** — Cloud VMs (default)
+- **exe.dev** — Alternative cloud provider
+- **boxlite** — Local micro-VMs for development
 
 ## Running Commands
 
@@ -26,13 +29,20 @@ Always use `uv run` to execute Python scripts and CLI commands (e.g., `uv run oc
 - `ocaptain telemetry-start` - Start OTLP collector
 - `ocaptain telemetry-stop` - Stop OTLP collector
 
-### sprites.dev Commands
+### Provider Commands
 
-Ships run on sprites.dev. Use `sprite` CLI for debugging:
+Ships can run on sprites.dev, exe.dev, or locally via boxlite.
 
+**sprites.dev** (use `sprite` CLI for debugging):
 ```bash
 sprite list -o <org>           # List sprites
 sprite exec -o <org> -s <name> # Run command on sprite
+```
+
+**boxlite** (local micro-VMs):
+```bash
+# Requires: pip install ocaptain[boxlite]
+export OCAPTAIN_PROVIDER="boxlite"
 ```
 
 ## Architecture
