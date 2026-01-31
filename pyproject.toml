@@ -18,6 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+boxlite = ["boxlite>=0.3.0"]
 dev = [
     "pytest>=8.0",
     "pytest-mock>=3.0",
@@ -52,6 +53,10 @@ strict = true
 
 [[tool.mypy.overrides]]
 module = "fabric.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "boxlite.*"
 ignore_missing_imports = true
 
 [tool.bandit]

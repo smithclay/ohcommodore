@@ -26,3 +26,16 @@ def test_tailscale_oauth_secret_from_env(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("OCAPTAIN_TAILSCALE_OAUTH_SECRET", "tskey-client-xxx-yyy")
     config = load_config()
     assert config.tailscale.oauth_secret == "tskey-client-xxx-yyy"
+
+
+def test_boxlite_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """BoxLite config should have sensible defaults."""
+    monkeypatch.delenv("OCAPTAIN_PROVIDER", raising=False)
+
+    from ocaptain.config import load_config
+
+    config = load_config()
+    boxlite_cfg = config.providers.get("boxlite", {})
+
+    # Should have defaults even if not explicitly configured
+    assert boxlite_cfg.get("image", "ubuntu:22.04") == "ubuntu:22.04"

@@ -95,6 +95,23 @@ wheels = [
 ]
 
 [[package]]
+name = "boxlite"
+version = "0.5.7"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/53/ed/5aafbf99ad911be52fbf33a8b8882dbb1e505752e70ecb3321caba925016/boxlite-0.5.7-cp311-cp311-macosx_14_0_arm64.whl", hash = "sha256:f9f991e4673cb87654f3795b69d6ec0ed2b980c7abe34f4f0e2956e8a55ba299", size = 30922721, upload-time = "2026-01-23T10:51:34.831Z" },
+    { url = "https://files.pythonhosted.org/packages/14/6e/8cb10c5f31c496ad70c550b9ed0faf7c8e86638784e50bebf8fe8eb9e709/boxlite-0.5.7-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:364447e73db8029b6c65baa2367788d5a307a8fbd655b4841043f4326f1f2021", size = 32531412, upload-time = "2026-01-23T10:51:38.171Z" },
+    { url = "https://files.pythonhosted.org/packages/12/4a/66d5f862f3b8bb8cef281b29298335a5edaab00a70dee4bf9721123593a5/boxlite-0.5.7-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:7c67eef8e8637e01297da03224cabbf224e94ccd69470c33cfa2bc0d593e19c5", size = 30921612, upload-time = "2026-01-23T10:51:41.222Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/0b/a25acd5e331dec10e9122f92de9c3c3aaec18587a3bfed6ecd6daced9069/boxlite-0.5.7-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:2c6dceaa2463959fd47163508e75d94ad8287d4e28559cffdc4c0e3c1d11b2cd", size = 32503832, upload-time = "2026-01-23T10:51:44.354Z" },
+    { url = "https://files.pythonhosted.org/packages/81/d7/3edfe30dd55cf9e21bf9e4f27a25a7822736a7a74d69426cf3745c05ae6d/boxlite-0.5.7-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:ebf2e7f2d2e96a364a7efda4a67a474161036ae5b17d06185bedce671fba6b5c", size = 30920130, upload-time = "2026-01-23T10:51:47.153Z" },
+    { url = "https://files.pythonhosted.org/packages/04/1e/a8a4c472272d141576b69f654a8bce883b88d4c9fe764f5f85c512fa5c13/boxlite-0.5.7-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:b5ac7bd79715366215de336f0c3d57499a1503bc0170b0dbed1f36cdc5ba5c58", size = 32503551, upload-time = "2026-01-23T10:51:50.36Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/3b/4116796707885804add5ca2265f46f92b51ea4a9905c5b5dd9751d196f73/boxlite-0.5.7-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:6b663b0dd7133163d534d1f15961c6a907215cb0e8e970fe0909765af2732b0a", size = 30917086, upload-time = "2026-01-23T10:51:53.255Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/61/504f005343595782165570febebed48fc44f7173c548a78183e774a600db/boxlite-0.5.7-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:3f9ff65a287a464704ff6826bc32c201710b6fa2e2413f98b021a9812f5d6d45", size = 32505179, upload-time = "2026-01-23T10:51:56.306Z" },
+    { url = "https://files.pythonhosted.org/packages/60/9e/0f60d578cfc0aab7a1bbcfa55ea79301fbff11bfd669dccf69b4ca2915e2/boxlite-0.5.7-cp314-cp314t-macosx_14_0_arm64.whl", hash = "sha256:b9ea3133959504ed0094e61a31c48254ca60e42092df12e06717667611833898", size = 30931729, upload-time = "2026-01-23T10:51:59.104Z" },
+    { url = "https://files.pythonhosted.org/packages/de/1c/e49cac83b94495fe01b8a97c0026b07099d9da694314fb157b2ab5f73e45/boxlite-0.5.7-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:d408007027e2ae0e410882bb20b98ab3c5a8da476e48acd59166c4e5668b2d52", size = 32526316, upload-time = "2026-01-23T10:52:02.028Z" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.1.4"
 source = { registry = "https://pypi.org/simple" }
@@ -547,6 +564,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+boxlite = [
+    { name = "boxlite" },
+]
 dev = [
     { name = "mypy" },
     { name = "pre-commit" },
@@ -557,6 +577,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "boxlite", marker = "extra == 'boxlite'", specifier = ">=0.3.0" },
     { name = "fabric", specifier = ">=3.2,<4" },
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
@@ -569,7 +590,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
     { name = "typer", specifier = ">=0.12,<1" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["boxlite", "dev"]
 
 [[package]]
 name = "packaging"
